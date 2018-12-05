@@ -53,11 +53,10 @@ int main(int argc,char **args)
   ierr = PetscOptionsGetInt(NULL,NULL,"-m",&m,NULL);CHKERRQ(ierr);
 
   /* PART 1:  Generate vector, then write it in the given data format */
-
+/*
   ierr = PetscLogEventRegister("Generate Vector",VEC_CLASSID,&VECTOR_GENERATE);CHKERRQ(ierr);
   ierr = PetscLogEventBegin(VECTOR_GENERATE,0,0,0,0);CHKERRQ(ierr);
-    
-  /* Generate vector */
+  // Generate vector 
   ierr = VecCreate(PETSC_COMM_WORLD,&u);CHKERRQ(ierr);
   ierr = PetscObjectSetName((PetscObject)u, "Test_Vec");CHKERRQ(ierr);
   ierr = VecSetSizes(u,PETSC_DECIDE,m);CHKERRQ(ierr);
@@ -71,15 +70,8 @@ int main(int argc,char **args)
   }
   ierr = VecAssemblyBegin(u);CHKERRQ(ierr);
   ierr = VecAssemblyEnd(u);CHKERRQ(ierr);
-//  ierr = VecView(u,PETSC_VIEWER_STDOUT_WORLD);CHKERRQ(ierr);
+  ierr = VecView(u,PETSC_VIEWER_STDOUT_WORLD);CHKERRQ(ierr);
 
-      PetscInt check_loc_size;
-  if (rank==0){
-  ierr = VecGetSize(u, &check_loc_size); CHKERRQ(ierr);
-  ierr = PetscPrintf(PETSC_COMM_SELF,"size before write: %d \n",check_loc_size);CHKERRQ(ierr);
-	}
-  
-    
   if (isbinary) {
     ierr = PetscPrintf(PETSC_COMM_WORLD,"writing vector in binary to vector.dat ...\n");CHKERRQ(ierr);
     ierr = PetscViewerBinaryOpen(PETSC_COMM_WORLD,"vector.dat",FILE_MODE_WRITE,&viewer);CHKERRQ(ierr);
@@ -105,7 +97,7 @@ int main(int argc,char **args)
 
 
   ierr = PetscLogEventEnd(VECTOR_GENERATE,0,0,0,0);CHKERRQ(ierr);
-
+*/
   /* PART 2:  Read in vector in binary format */
 
   /* Read new vector in binary format */
@@ -163,7 +155,7 @@ int main(int argc,char **args)
   ierr = VecLoad(u,viewer);CHKERRQ(ierr);
   ierr = PetscViewerDestroy(&viewer);CHKERRQ(ierr);
   ierr = PetscLogEventEnd(VECTOR_READ,0,0,0,0);CHKERRQ(ierr);
-  //ierr = VecView(u,PETSC_VIEWER_STDOUT_WORLD);CHKERRQ(ierr);
+  ierr = VecView(u,PETSC_VIEWER_STDOUT_WORLD);CHKERRQ(ierr);
   ierr = VecGetArrayRead(u,&values);CHKERRQ(ierr);
   ierr = VecGetLocalSize(u,&ldim);CHKERRQ(ierr);
   ierr = VecGetOwnershipRange(u,&low,NULL);CHKERRQ(ierr);
@@ -172,14 +164,6 @@ int main(int argc,char **args)
   }
   ierr = VecRestoreArrayRead(u,&values);CHKERRQ(ierr);
 
-    
-  if (rank==0){
-  ierr = VecGetLocalSize(u, &check_loc_size); CHKERRQ(ierr);
-  ierr = PetscPrintf(PETSC_COMM_SELF,"local_sizes after read: %d \n",check_loc_size);CHKERRQ(ierr);
-	}
-
-  
-    
   /* Free data structures */
   ierr = VecDestroy(&u);CHKERRQ(ierr);
   ierr = PetscFinalize();
