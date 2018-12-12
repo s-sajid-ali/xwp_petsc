@@ -15,9 +15,9 @@ Input parameters include:\n\
 
 /* ------------------------------------------------------------------------
 
-   This program solves the one-dimensional heat equation (also called the
+   This program solves the one-dimensional helmholtz equation (also called the
    diffusion equation),
-       u_t = u_xx,
+       u_t = A*u_xx + F*u,
    This is a linear, second-order, parabolic equation.
 
    We discretize the right-hand side using finite differences with
@@ -28,12 +28,9 @@ Input parameters include:\n\
        ex3 -ts_type <timestepping solver>
 
    Notes:
-   This code demonstrates the TS solver interface to two variants of
-   linear problems, u_t = f(u,t), namely
-     - time-dependent f:   f(u,t) is a function of t
-     - time-independent f: f(u,t) is simply f(u)
+   time-dependent F:   f(u,t) is a function of t
 
-    The parallel version of this code is ts/examples/tutorials/ex4.c
+    Uniprocessor example
 
   ------------------------------------------------------------------------- */
 
@@ -63,7 +60,6 @@ typedef struct {
   PetscReal   step_time;         /* step size in time */
   PetscBool   debug;             /* flag (1 indicates activation of debugging printouts) */
   PetscViewer viewer1;           /* viewer for the solution */
-  Mat         A;                 /* RHS mat, used with IFunction interface */
   Mat         ref_index;         /* Matrix holding the refractive indices*/
 } AppCtx;
 
@@ -82,11 +78,12 @@ int main(int argc,char **argv)
   Vec            u;                      /* approximate solution vector */
   PetscReal      time_total_max = 1e-3;  /* default max total time */
   PetscInt       time_steps_max = 5000;  /* default max timesteps */
-  PetscDraw      draw;                   /* drawing context */
+  PetscDraw      draw;                   /* drawing context */  
+  PetscInt       steps;                  /* output for TSGetStepNumber */  
+  PetscInt       m;                      /* problem size */
+  PetscReal      dt;                     /* For TSSetTimeStep*/
+  PetscMPIInt    size;                   /* MPI size*/
   PetscErrorCode ierr;
-  PetscInt       steps,m;
-  PetscMPIInt    size;
-  PetscReal      dt;
 
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
      Initialize program and set problem parameters
@@ -107,6 +104,22 @@ int main(int argc,char **argv)
 
   ierr = PetscPrintf(PETSC_COMM_SELF,"Solving a linear TS problem on 1 processor\n");CHKERRQ(ierr);
   ierr = PetscPrintf(PETSC_COMM_SELF,"m : %d, lambda : %e\n",appctx.m, appctx.lambda);CHKERRQ(ierr);
+    
+  /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+     Read the refractive index matrix and save it at appctx->ref_index
+     Destroy the viewer
+     - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+  PetscViewer ref_index_viewer;
+  ierr = PetscViewerBinaryOpen(PETSC_COMM_WORLD,"refractive_index_bin.dat",FILE_MODE_READ,&ref_index_viewer);CHKERRQ(ierr);
+  
+  ierr = MatCreate(PETSC_COMM_WORLD,&appctx.ref_index);CHKERRQ(ierr);
+  //ierr = MatSetOptionsPrefix(&appctx.ref_index,"a_");CHKERRQ(ierr);
+  ierr = MatSetType(appctx.ref_index,MATDENSE);CHKERRQ(ierr);
+  ierr = MatSetFromOptions(appctx.ref_index);CHKERRQ(ierr);
+  ierr = MatLoad(appctx.ref_index,ref_index_viewer);CHKERRQ(ierr);
+  ierr = PetscViewerDestroy(&ref_index_viewer);CHKERRQ(ierr);
+
+    
 
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
      Create vector data structures
@@ -149,7 +162,6 @@ int main(int argc,char **argv)
   ierr = MatSetFromOptions(A);CHKERRQ(ierr);
   ierr = MatSetUp(A);CHKERRQ(ierr);
 
-  appctx.A = NULL;
   /*
     For linear problems with a time-dependent f(u,t) in the equation
     u_t = f(u,t), the user provides the discretized right-hand-side
@@ -211,7 +223,7 @@ int main(int argc,char **argv)
   ierr = VecDestroy(&u);CHKERRQ(ierr);
   ierr = PetscViewerDestroy(&appctx.viewer1);CHKERRQ(ierr);
   ierr = VecDestroy(&appctx.solution);CHKERRQ(ierr);
-  ierr = MatDestroy(&appctx.A);CHKERRQ(ierr);
+  ierr = MatDestroy(&appctx.ref_index);CHKERRQ(ierr);
 
   /*
      Always call PetscFinalize() before exiting a program.  This routine
@@ -347,23 +359,12 @@ PetscErrorCode RHSMatrixFreeSpace(TS ts,PetscReal t,Vec X,Mat AA,Mat BB,void *ct
   PetscErrorCode ierr;
   PetscInt       i,idx[3];
   PetscScalar    v[3];  
-  PetscViewer    view_slice;
   Vec            slice_vec;
   PetscComplex   prefac = (-1*PETSC_i*appctx->lambda/(4*PETSC_PI))*(1/(appctx->step_grid*appctx->step_grid));
 
   
   PetscInt iteration_number;
-  iteration_number = t/appctx->step_time;
-  
-  PetscPrintf(PETSC_COMM_WORLD,"time is t: %e, it: %d\n",t,iteration_number);
-  
-  char              filename[50];
-  char              slice_num[5];
-  sprintf(slice_num, "%d",iteration_number);
-  strcpy(filename,"slice_");
-  strcat(filename, slice_num);
-  strcat(filename, ".h5");
-    
+  iteration_number = t/appctx->step_time;    
     
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
      Compute entries for the locally owned part of the matrix
@@ -403,25 +404,28 @@ PetscErrorCode RHSMatrixFreeSpace(TS ts,PetscReal t,Vec X,Mat AA,Mat BB,void *ct
   ierr = MatAssemblyBegin(A,MAT_FINAL_ASSEMBLY);CHKERRQ(ierr);
   ierr = MatAssemblyEnd(A,MAT_FINAL_ASSEMBLY);CHKERRQ(ierr);
 
-  ierr = PetscViewerHDF5Open(PETSC_COMM_WORLD,filename,FILE_MODE_READ,&view_slice);CHKERRQ(ierr);
-  ierr = VecCreate(PETSC_COMM_WORLD,&slice_vec);CHKERRQ(ierr);
-  ierr = PetscObjectSetName((PetscObject) slice_vec,"Test_Vec");CHKERRQ(ierr);
-  ierr = VecLoad(slice_vec,view_slice);CHKERRQ(ierr);
-  ierr = PetscViewerDestroy(&view_slice);CHKERRQ(ierr);
     
+  /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+     Set the diagonal with current time dependant F
+     - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+    
+  ierr = VecCreateSeq(PETSC_COMM_SELF,appctx->m,&slice_vec);CHKERRQ(ierr);
+  ierr = MatGetColumnVector(appctx->ref_index,slice_vec,iteration_number);CHKERRQ(ierr);
   ierr = MatDiagonalSet(A,slice_vec,ADD_VALUES); CHKERRQ(ierr);
-
+  ierr = MatAssemblyBegin(A,MAT_FINAL_ASSEMBLY);CHKERRQ(ierr);
+  ierr = MatAssemblyEnd(A,MAT_FINAL_ASSEMBLY);CHKERRQ(ierr);
+    
+  /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+     Boundary conditions.
+     - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
   
   PetscInt     row[2];
   PetscScalar  rho;
-  row[0]=0; row[1]=4999; 
+  row[0]=0; row[1]=appctx->m-1; 
   rho = 0;
   ierr = MatZeroRowsColumns( A, 2, row, rho, NULL,NULL ); CHKERRQ(ierr);
-
-
   ierr = MatAssemblyBegin(A,MAT_FINAL_ASSEMBLY);CHKERRQ(ierr);
   ierr = MatAssemblyEnd(A,MAT_FINAL_ASSEMBLY);CHKERRQ(ierr);
-
   
     
   /*
@@ -429,9 +433,6 @@ PetscErrorCode RHSMatrixFreeSpace(TS ts,PetscReal t,Vec X,Mat AA,Mat BB,void *ct
      to the matrix. If we do, it will generate an error.
   */
   ierr = MatSetOption(A,MAT_NEW_NONZERO_LOCATION_ERR,PETSC_TRUE);CHKERRQ(ierr);
-
-    
-  ierr = VecDestroy(&slice_vec);CHKERRQ(ierr);
 
   return 0;
 }
