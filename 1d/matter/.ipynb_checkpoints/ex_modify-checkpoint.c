@@ -60,11 +60,12 @@ typedef struct {
   Vec         solution;          /* global exact solution vector */
   PetscInt    m;                 /* total number of grid points */
   PetscReal   step_grid;         /* grid spacing */
-  PetscReal   slices;            /* number of slices through object */
   PetscReal   lambda;            /* wavelength */
+  PetscReal   step_time;         /* step size in time */
   PetscBool   debug;             /* flag (1 indicates activation of debugging printouts) */
   PetscViewer viewer1;           /* viewer for the solution */
   Mat         A;                 /* RHS mat, used with IFunction interface */
+  Mat         ref_index;         /* Matrix holding the refractive indices*/
 } AppCtx;
 
 /*
@@ -80,8 +81,8 @@ int main(int argc,char **argv)
   TS             ts;                     /* timestepping context */
   Mat            A;                      /* matrix data structure */
   Vec            u;                      /* approximate solution vector */
-  PetscReal      time_total_max = 1e-5;  /* default max total time */
-  PetscInt       time_steps_max = 250;   /* default max timesteps */
+  PetscReal      time_total_max = 1e-3;  /* default max total time */
+  PetscInt       time_steps_max = 5000;  /* default max timesteps */
   PetscDraw      draw;                   /* drawing context */
   PetscErrorCode ierr;
   PetscInt       steps,m;
@@ -96,17 +97,17 @@ int main(int argc,char **argv)
   ierr = MPI_Comm_size(PETSC_COMM_WORLD,&size);CHKERRQ(ierr);
   if (size != 1) SETERRQ(PETSC_COMM_SELF,1,"This is a uniprocessor example only!");
 
-  m    = 512;
+  m    = 5000;
   ierr = PetscOptionsGetInt(NULL,NULL,"-m",&m,NULL);CHKERRQ(ierr);
   ierr = PetscOptionsHasName(NULL,NULL,"-debug",&appctx.debug);CHKERRQ(ierr);
 
   appctx.m         = m;
-  appctx.step_grid = 1e-9;  
-  appctx.slices    = 1000;
+  appctx.step_grid = 1.4e-9;  
   appctx.lambda    = 0.12398e-9;
+  appctx.step_time = time_total_max/time_steps_max;
 
   ierr = PetscPrintf(PETSC_COMM_SELF,"Solving a linear TS problem on 1 processor\n");CHKERRQ(ierr);
-  ierr = PetscPrintf(PETSC_COMM_SELF,"m : %d, slices : %f, lambda : %e\n",appctx.m, appctx.slices, appctx.lambda);CHKERRQ(ierr);
+  ierr = PetscPrintf(PETSC_COMM_SELF,"m : %d, lambda : %e\n",appctx.m, appctx.lambda);CHKERRQ(ierr);
 
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
      Create vector data structures
@@ -257,8 +258,8 @@ PetscErrorCode InitialConditions(Vec u,AppCtx *appctx)
      VecSetValues() or VecSetValuesLocal().
   */
   for (i=0; i<appctx->m; i++) {
-      if (i<appctx->m/4){u_localptr[i] = 0+0*PETSC_i;}
-      else if (i>(3*(appctx->m/4))){u_localptr[i] = 0+0*PETSC_i;}
+      if (i<appctx->m/7){u_localptr[i] = 0+0*PETSC_i;}
+      else if (i>((appctx->m*3/7))){u_localptr[i] = 0+0*PETSC_i;}
       else {u_localptr[i] = 1+0*PETSC_i;}
       }
   /*
@@ -351,13 +352,19 @@ PetscErrorCode RHSMatrixFreeSpace(TS ts,PetscReal t,Vec X,Mat AA,Mat BB,void *ct
   Vec            slice_vec;
   PetscComplex   prefac = (-1*PETSC_i*appctx->lambda/(4*PETSC_PI))*(1/(appctx->step_grid*appctx->step_grid));
 
-  PetscInt          slice = 23;
+  
+  PetscInt iteration_number;
+  iteration_number = t/appctx->step_time;
+  
+  PetscPrintf(PETSC_COMM_WORLD,"time is t: %e, it: %d\n",t,iteration_number);
+  
   char              filename[50];
   char              slice_num[5];
-  sprintf(slice_num, "%d",slice);
+  sprintf(slice_num, "%d",iteration_number);
   strcpy(filename,"slice_");
   strcat(filename, slice_num);
   strcat(filename, ".h5");
+    
     
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
      Compute entries for the locally owned part of the matrix
@@ -404,6 +411,18 @@ PetscErrorCode RHSMatrixFreeSpace(TS ts,PetscReal t,Vec X,Mat AA,Mat BB,void *ct
   ierr = PetscViewerDestroy(&view_slice);CHKERRQ(ierr);
     
   ierr = MatDiagonalSet(A,slice_vec,ADD_VALUES); CHKERRQ(ierr);
+
+  
+  PetscInt     row[2];
+  PetscScalar  rho;
+  row[0]=0; row[1]=4999; 
+  rho = 0;
+  ierr = MatZeroRowsColumns( A, 2, row, rho, NULL,NULL ); CHKERRQ(ierr);
+
+
+  ierr = MatAssemblyBegin(A,MAT_FINAL_ASSEMBLY);CHKERRQ(ierr);
+  ierr = MatAssemblyEnd(A,MAT_FINAL_ASSEMBLY);CHKERRQ(ierr);
+
   
     
   /*
