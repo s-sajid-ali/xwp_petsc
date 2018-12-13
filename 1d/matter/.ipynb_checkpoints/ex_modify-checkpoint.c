@@ -1,5 +1,5 @@
 
-static char help[] ="Attempt X-ray propagation in matter based on ex3/ex4\n\
+static char help[] ="Attempt X-ray propagation in matter based on ex3\n\
 Clear unnecesary norm checking\n\
 Solves a simple time-dependent linear PDE .\n\
 Input parameters include:\n\
@@ -15,8 +15,7 @@ Input parameters include:\n\
 
 /* ------------------------------------------------------------------------
 
-   This program solves the one-dimensional helmholtz equation (also called the
-   diffusion equation),
+   This program solves the one-dimensional helmholtz equation:
        u_t = A*u_xx + F*u,
    This is a linear, second-order, parabolic equation.
 
