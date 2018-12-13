@@ -1,5 +1,5 @@
 
-static char help[] ="Attempt X-ray free space propagation based on ex3/ex4\n\
+static char help[] ="Attempt X-ray propagation in matter based on ex3/ex4\n\
 Clear unnecesary norm checking\n\
 Solves a simple time-dependent linear PDE .\n\
 Input parameters include:\n\
