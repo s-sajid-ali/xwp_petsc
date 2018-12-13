@@ -52,7 +52,6 @@ Input parameters include:\n\
    application-provided call-back routines.
 */
 typedef struct {
-  Vec         solution;          /* global exact solution vector */
   PetscInt    m;                 /* total number of grid points */
   PetscReal   step_grid;         /* grid spacing */
   PetscReal   lambda;            /* wavelength */
@@ -112,26 +111,22 @@ int main(int argc,char **argv)
   ierr = PetscViewerBinaryOpen(PETSC_COMM_WORLD,"refractive_index_bin.dat",FILE_MODE_READ,&ref_index_viewer);CHKERRQ(ierr);
   
   ierr = MatCreate(PETSC_COMM_WORLD,&appctx.ref_index);CHKERRQ(ierr);
-  //ierr = MatSetOptionsPrefix(&appctx.ref_index,"a_");CHKERRQ(ierr);
   ierr = MatSetType(appctx.ref_index,MATDENSE);CHKERRQ(ierr);
   ierr = MatSetFromOptions(appctx.ref_index);CHKERRQ(ierr);
   ierr = MatLoad(appctx.ref_index,ref_index_viewer);CHKERRQ(ierr);
   ierr = PetscViewerDestroy(&ref_index_viewer);CHKERRQ(ierr);
 
-    
-
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
      Create vector data structures
      - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
-  /*
-     Create vector data structures for approximate and exact solutions
-  */
+  /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+     Create vector data structures for approximate solutions
+    - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -*/
   ierr = VecCreateSeq(PETSC_COMM_SELF,m,&u);CHKERRQ(ierr);
-  ierr = VecDuplicate(u,&appctx.solution);CHKERRQ(ierr);
 
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-     Set up displays to show graphs of the solution and error
+     Set up display to show graph of the solution
      - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
   ierr = PetscViewerDrawOpen(PETSC_COMM_SELF,0,"",80,380,400,160,&appctx.viewer1);CHKERRQ(ierr);
@@ -152,7 +147,6 @@ int main(int argc,char **argv)
   ierr = TSMonitorSet(ts,Monitor,&appctx,NULL);CHKERRQ(ierr);
 
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
      Create matrix data structure; set matrix evaluation routine.
      - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
@@ -221,7 +215,6 @@ int main(int argc,char **argv)
   ierr = MatDestroy(&A);CHKERRQ(ierr);
   ierr = VecDestroy(&u);CHKERRQ(ierr);
   ierr = PetscViewerDestroy(&appctx.viewer1);CHKERRQ(ierr);
-  ierr = VecDestroy(&appctx.solution);CHKERRQ(ierr);
   ierr = MatDestroy(&appctx.ref_index);CHKERRQ(ierr);
 
   /*
@@ -312,13 +305,24 @@ PetscErrorCode Monitor(TS ts,PetscInt step,PetscReal time,Vec u,void *ctx)
   AppCtx         *appctx = (AppCtx*) ctx;   /* user-defined application context */
   PetscErrorCode ierr;
   PetscReal      dt,dttol;
-    
-  /*
-      View a graph of the current iterate
-   */
-   VecView(u,appctx->viewer1);
+  Vec            u_abs;                  /* absolute value of approximate solution vector */
   
+  /*- - - - - - - - - - - - - - - - - - - -
+      Copy solution vector to new vector, 
+      conver to absolute value for viewing
+   - - - - - - - - - - - - - - - - - - - -*/
+  ierr = VecDuplicate(u,&u_abs);CHKERRQ(ierr);
+  ierr = VecCopy(u,u_abs);CHKERRQ(ierr);
+  ierr = VecAbs(u_abs);CHKERRQ(ierr);
     
+  /* - - - - - - - - - - - - - - - - - - - - 
+      View a graph of the current iterate
+   - - - - - - - - - - - - - - - - - - - - */
+  ierr = VecView(u_abs,appctx->viewer1);CHKERRQ(ierr);
+  
+
+  ierr = VecDestroy(&u_abs);CHKERRQ(ierr);
+      
   /*
      Print debugging information if desired
   */

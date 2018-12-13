@@ -49,7 +49,6 @@ Input parameters include:\n\
    application-provided call-back routines.
 */
 typedef struct {
-  Vec         solution;          /* global exact solution vector */
   PetscInt    m;                 /* total number of grid points */
   PetscReal   step_grid;         /* grid spacing */
   PetscReal   slices;            /* number of slices through object */
@@ -104,14 +103,13 @@ int main(int argc,char **argv)
      Create vector data structures
      - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
-  /*
-     Create vector data structures for approximate and exact solutions
-  */
+  /*- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+     Create vector data structures for approximate solution
+    - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -*/
   ierr = VecCreateSeq(PETSC_COMM_SELF,m,&u);CHKERRQ(ierr);
-  ierr = VecDuplicate(u,&appctx.solution);CHKERRQ(ierr);
 
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-     Set up displays to show graphs of the solution and error
+     Set up display to show graph of the solution
      - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
   ierr = PetscViewerDrawOpen(PETSC_COMM_SELF,0,"",80,380,400,160,&appctx.viewer1);CHKERRQ(ierr);
@@ -202,7 +200,6 @@ int main(int argc,char **argv)
   ierr = MatDestroy(&A);CHKERRQ(ierr);
   ierr = VecDestroy(&u);CHKERRQ(ierr);
   ierr = PetscViewerDestroy(&appctx.viewer1);CHKERRQ(ierr);
-  ierr = VecDestroy(&appctx.solution);CHKERRQ(ierr);
   ierr = MatDestroy(&appctx.A);CHKERRQ(ierr);
 
   /*
@@ -293,16 +290,27 @@ PetscErrorCode Monitor(TS ts,PetscInt step,PetscReal time,Vec u,void *ctx)
   AppCtx         *appctx = (AppCtx*) ctx;   /* user-defined application context */
   PetscErrorCode ierr;
   PetscReal      dt,dttol;
-    
-  /*
-      View a graph of the current iterate
-   */
-   VecView(u,appctx->viewer1);
+  Vec            u_abs;                  /* absolute value of approximate solution vector */
   
+  /*- - - - - - - - - - - - - - - - - - - -
+      Copy solution vector to new vector, 
+      conver to absolute value for viewing
+   - - - - - - - - - - - - - - - - - - - -*/
+  ierr = VecDuplicate(u,&u_abs);CHKERRQ(ierr);
+  ierr = VecCopy(u,u_abs);CHKERRQ(ierr);
+  ierr = VecAbs(u_abs);CHKERRQ(ierr);
     
-  /*
+  /* - - - - - - - - - - - - - - - - - - - - 
+      View a graph of the current iterate
+   - - - - - - - - - - - - - - - - - - - - */
+  ierr = VecView(u_abs,appctx->viewer1);CHKERRQ(ierr);
+  
+
+  ierr = VecDestroy(&u_abs);CHKERRQ(ierr);
+    
+  /*- - - - - - - - - - - - - - - - - - - -
      Print debugging information if desired
-  */
+   - - - - - - - - - - - - - - - - - - - -*/
   if (appctx->debug) {
     ierr = PetscPrintf(PETSC_COMM_SELF,"Computed solution vector\n");CHKERRQ(ierr);
     ierr = VecView(u,PETSC_VIEWER_STDOUT_SELF);CHKERRQ(ierr);
@@ -379,6 +387,20 @@ PetscErrorCode RHSMatrixFreeSpace(TS ts,PetscReal t,Vec X,Mat AA,Mat BB,void *ct
   ierr = MatAssemblyBegin(A,MAT_FINAL_ASSEMBLY);CHKERRQ(ierr);
   ierr = MatAssemblyEnd(A,MAT_FINAL_ASSEMBLY);CHKERRQ(ierr);
 
+    
+  /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+     Boundary conditions.
+   - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+  
+  PetscInt     row[2];
+  PetscScalar  rho;
+  row[0]=0; row[1]=appctx->m-1; 
+  rho = 0;
+  ierr = MatZeroRowsColumns( A, 2, row, rho, NULL,NULL ); CHKERRQ(ierr);
+  ierr = MatAssemblyBegin(A,MAT_FINAL_ASSEMBLY);CHKERRQ(ierr);
+  ierr = MatAssemblyEnd(A,MAT_FINAL_ASSEMBLY);CHKERRQ(ierr);
+ 
+    
   /*
      Set and option to indicate that we will never add a new nonzero location
      to the matrix. If we do, it will generate an error.
