@@ -97,7 +97,7 @@ int main(int argc,char **argv)
 
   appctx.m         = m;
   appctx.step_grid = 1.4e-9;  
-  appctx.lambda    = 0.12398e-9;
+  appctx.lambda    = 1.23984e-10;
   appctx.step_time = time_total_max/time_steps_max;
 
   ierr = PetscPrintf(PETSC_COMM_SELF,"Solving a linear TS problem on 1 processor\n");CHKERRQ(ierr);
@@ -413,7 +413,8 @@ PetscErrorCode RHSMatrixFreeSpace(TS ts,PetscReal t,Vec X,Mat AA,Mat BB,void *ct
      - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
     
   ierr = VecCreateSeq(PETSC_COMM_SELF,appctx->m,&slice_vec);CHKERRQ(ierr);
-  ierr = MatGetColumnVector(appctx->ref_index,slice_vec,iteration_number);CHKERRQ(ierr);
+  if (iteration_number<appctx->m){
+      ierr = MatGetColumnVector(appctx->ref_index,slice_vec,iteration_number);CHKERRQ(ierr);}
   ierr = MatDiagonalSet(A,slice_vec,ADD_VALUES); CHKERRQ(ierr);
   ierr = MatAssemblyBegin(A,MAT_FINAL_ASSEMBLY);CHKERRQ(ierr);
   ierr = MatAssemblyEnd(A,MAT_FINAL_ASSEMBLY);CHKERRQ(ierr);
@@ -426,7 +427,7 @@ PetscErrorCode RHSMatrixFreeSpace(TS ts,PetscReal t,Vec X,Mat AA,Mat BB,void *ct
   PetscScalar  rho;
   row[0]=0; row[1]=appctx->m-1; 
   rho = 0;
-  ierr = MatZeroRowsColumns( A, 2, row, rho, NULL,NULL ); CHKERRQ(ierr);
+  ierr = MatZeroRowsColumns(A, 2, row, rho, NULL,NULL ); CHKERRQ(ierr);
   ierr = MatAssemblyBegin(A,MAT_FINAL_ASSEMBLY);CHKERRQ(ierr);
   ierr = MatAssemblyEnd(A,MAT_FINAL_ASSEMBLY);CHKERRQ(ierr);
   
