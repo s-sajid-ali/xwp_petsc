@@ -58,6 +58,7 @@ typedef struct {
   PetscReal   step_time;         /* step size in time */
   PetscBool   debug;             /* flag (1 indicates activation of debugging printouts) */
   PetscViewer viewer1;           /* viewer for the solution */
+  PetscViewer    hdf5_sol_viewer;        /* viewer to write the solution to hdf5*/
   Mat         ref_index;         /* Matrix holding the refractive indices*/
 } AppCtx;
 
@@ -65,7 +66,7 @@ typedef struct {
    User-defined routines
 */
 extern PetscErrorCode InitialConditions(Vec,AppCtx*);
-extern PetscErrorCode RHSMatrixFreeSpace(TS,PetscReal,Vec,Mat,Mat,void*);
+extern PetscErrorCode RHSMatrixMatter(TS,PetscReal,Vec,Mat,Mat,void*);
 extern PetscErrorCode Monitor(TS,PetscInt,PetscReal,Vec,void*);
 
 int main(int argc,char **argv)
@@ -115,6 +116,13 @@ int main(int argc,char **argv)
   ierr = MatSetFromOptions(appctx.ref_index);CHKERRQ(ierr);
   ierr = MatLoad(appctx.ref_index,ref_index_viewer);CHKERRQ(ierr);
   ierr = PetscViewerDestroy(&ref_index_viewer);CHKERRQ(ierr);
+    
+  /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+     Store solution as hdf5
+     - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+    
+  ierr = PetscViewerHDF5Open(PETSC_COMM_WORLD,"solution.h5",FILE_MODE_WRITE,&appctx.hdf5_sol_viewer);CHKERRQ(ierr);
+
 
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
      Create vector data structures
@@ -124,6 +132,7 @@ int main(int argc,char **argv)
      Create vector data structures for approximate solutions
     - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -*/
   ierr = VecCreateSeq(PETSC_COMM_SELF,m,&u);CHKERRQ(ierr);
+  ierr = PetscObjectSetName((PetscObject)u, "Sol_vec");CHKERRQ(ierr);
 
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
      Set up display to show graph of the solution
@@ -161,7 +170,7 @@ int main(int argc,char **argv)
     as a time-dependent matrix.
   */
   ierr = TSSetRHSFunction(ts,NULL,TSComputeRHSFunctionLinear,&appctx);CHKERRQ(ierr);
-  ierr = TSSetRHSJacobian(ts,A,A,RHSMatrixFreeSpace,&appctx);CHKERRQ(ierr);
+  ierr = TSSetRHSJacobian(ts,A,A,RHSMatrixMatter,&appctx);CHKERRQ(ierr);
   
  /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
      Set solution vector and initial timestep
@@ -215,6 +224,7 @@ int main(int argc,char **argv)
   ierr = MatDestroy(&A);CHKERRQ(ierr);
   ierr = VecDestroy(&u);CHKERRQ(ierr);
   ierr = PetscViewerDestroy(&appctx.viewer1);CHKERRQ(ierr);
+  ierr = PetscViewerDestroy(&appctx.hdf5_sol_viewer);CHKERRQ(ierr);
   ierr = MatDestroy(&appctx.ref_index);CHKERRQ(ierr);
 
   /*
@@ -306,7 +316,13 @@ PetscErrorCode Monitor(TS ts,PetscInt step,PetscReal time,Vec u,void *ctx)
   PetscErrorCode ierr;
   PetscReal      dt,dttol;
   Vec            u_abs;                  /* absolute value of approximate solution vector */
-  
+  PetscInt       iteration_number;
+  iteration_number = time/appctx->step_time;    
+    
+  ierr = PetscViewerHDF5SetTimestep(appctx->hdf5_sol_viewer, iteration_number);CHKERRQ(ierr);
+  ierr = VecView(u,appctx->hdf5_sol_viewer);CHKERRQ(ierr);
+   
+    
   /*- - - - - - - - - - - - - - - - - - - -
       Copy solution vector to new vector, 
       conver to absolute value for viewing
@@ -353,7 +369,7 @@ PetscErrorCode Monitor(TS ts,PetscInt step,PetscReal time,Vec u,void *ctx)
    Recall that MatSetValues() uses 0-based row and column numbers
    in Fortran as well as in C.
 */
-PetscErrorCode RHSMatrixFreeSpace(TS ts,PetscReal t,Vec X,Mat AA,Mat BB,void *ctx)
+PetscErrorCode RHSMatrixMatter(TS ts,PetscReal t,Vec X,Mat AA,Mat BB,void *ctx)
 {
   Mat            A       = AA;                /* Jacobian matrix */
   AppCtx         *appctx = (AppCtx*)ctx;     /* user-defined application context */
