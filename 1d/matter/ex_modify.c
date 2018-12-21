@@ -58,7 +58,8 @@ typedef struct {
   PetscReal   step_time;         /* step size in time */
   PetscBool   debug;             /* flag (1 indicates activation of debugging printouts) */
   PetscViewer viewer1;           /* viewer for the solution */
-  PetscViewer    hdf5_sol_viewer;        /* viewer to write the solution to hdf5*/
+  PetscViewer hdf5_sol_viewer;   /* viewer to write the solution to hdf5*/
+  PetscViewer hdf5_rid_viewer;   /* viewer to write the ref index to hdf5, for debugging*/
   Mat         ref_index;         /* Matrix holding the refractive indices*/
 } AppCtx;
 
@@ -123,6 +124,11 @@ int main(int argc,char **argv)
     
   ierr = PetscViewerHDF5Open(PETSC_COMM_WORLD,"solution.h5",FILE_MODE_WRITE,&appctx.hdf5_sol_viewer);CHKERRQ(ierr);
 
+  /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+   Store ref index as hdf5
+    - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+    
+  ierr = PetscViewerHDF5Open(PETSC_COMM_WORLD,"rid.h5",FILE_MODE_WRITE,&appctx.hdf5_rid_viewer);CHKERRQ(ierr);
 
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
      Create vector data structures
@@ -132,7 +138,7 @@ int main(int argc,char **argv)
      Create vector data structures for approximate solutions
     - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -*/
   ierr = VecCreateSeq(PETSC_COMM_SELF,m,&u);CHKERRQ(ierr);
-  ierr = PetscObjectSetName((PetscObject)u, "Sol_vec");CHKERRQ(ierr);
+  ierr = PetscObjectSetName((PetscObject)u, "sol_vec");CHKERRQ(ierr);
 
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
      Set up display to show graph of the solution
@@ -225,6 +231,7 @@ int main(int argc,char **argv)
   ierr = VecDestroy(&u);CHKERRQ(ierr);
   ierr = PetscViewerDestroy(&appctx.viewer1);CHKERRQ(ierr);
   ierr = PetscViewerDestroy(&appctx.hdf5_sol_viewer);CHKERRQ(ierr);
+  ierr = PetscViewerDestroy(&appctx.hdf5_rid_viewer);CHKERRQ(ierr);
   ierr = MatDestroy(&appctx.ref_index);CHKERRQ(ierr);
 
   /*
@@ -316,8 +323,10 @@ PetscErrorCode Monitor(TS ts,PetscInt step,PetscReal time,Vec u,void *ctx)
   PetscErrorCode ierr;
   PetscReal      dt,dttol;
   Vec            u_abs;                  /* absolute value of approximate solution vector */
+  Vec            rid;                    /* optionally store refractive index for debugging */
   PetscInt       iteration_number;
   iteration_number = time/appctx->step_time;    
+    
     
   ierr = PetscViewerHDF5SetTimestep(appctx->hdf5_sol_viewer, iteration_number);CHKERRQ(ierr);
   ierr = VecView(u,appctx->hdf5_sol_viewer);CHKERRQ(ierr);
@@ -335,18 +344,23 @@ PetscErrorCode Monitor(TS ts,PetscInt step,PetscReal time,Vec u,void *ctx)
       View a graph of the current iterate
    - - - - - - - - - - - - - - - - - - - - */
   ierr = VecView(u_abs,appctx->viewer1);CHKERRQ(ierr);
-  
-
-  ierr = VecDestroy(&u_abs);CHKERRQ(ierr);
       
+  ierr = VecDestroy(&u_abs);CHKERRQ(ierr);  
   /*
      Print debugging information if desired
   */
   if (appctx->debug) {
-    ierr = PetscPrintf(PETSC_COMM_SELF,"Computed solution vector\n");CHKERRQ(ierr);
-    ierr = VecView(u,PETSC_VIEWER_STDOUT_SELF);CHKERRQ(ierr);
+      ierr = VecDuplicate(u,&rid);CHKERRQ(ierr);
+      if (iteration_number<appctx->m){
+          ierr = MatGetColumnVector(appctx->ref_index,rid,iteration_number);CHKERRQ(ierr);}  
+      ierr = PetscObjectSetName((PetscObject)rid, "rid_vec");CHKERRQ(ierr);
+      ierr = PetscViewerHDF5SetTimestep(appctx->hdf5_rid_viewer, iteration_number);CHKERRQ(ierr);
+      ierr = VecView(rid,appctx->hdf5_rid_viewer);CHKERRQ(ierr);
+      ierr = VecDestroy(&rid);CHKERRQ(ierr); 
      }
 
+  
+    
   return 0;
 }
 /* --------------------------------------------------------------------- */
@@ -389,23 +403,10 @@ PetscErrorCode RHSMatrixMatter(TS ts,PetscReal t,Vec X,Mat AA,Mat BB,void *ctx)
      Compute entries for the locally owned part of the matrix
      - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
   /*
-     Set matrix rows corresponding to boundary data
-  */
-
-  mstart = 0;
-  v[0]   = 1.0;
-  ierr   = MatSetValues(A,1,&mstart,1,&mstart,v,INSERT_VALUES);CHKERRQ(ierr);
-  mstart++;
-
-  mend--;
-  v[0] = 1.0;
-  ierr = MatSetValues(A,1,&mend,1,&mend,v,INSERT_VALUES);CHKERRQ(ierr);
-
-  /*
      Set matrix rows corresponding to interior data.  We construct the
      matrix one row at a time.
   */
-  v[0] = prefac*-1; v[1] = prefac*2; v[2] = prefac*-1;
+  v[0] = prefac*1; v[1] = prefac*-2; v[2] = prefac*1;
   for (i=mstart; i<mend; i++) {
     idx[0] = i-1; idx[1] = i; idx[2] = i+1;
     ierr   = MatSetValues(A,1,&i,3,idx,v,INSERT_VALUES);CHKERRQ(ierr);
@@ -425,7 +426,8 @@ PetscErrorCode RHSMatrixMatter(TS ts,PetscReal t,Vec X,Mat AA,Mat BB,void *ctx)
 
     
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-     Set the diagonal with current time dependant F
+     Set the diagonal with current time dependant F, 
+     store refractive index
      - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
     
   ierr = VecCreateSeq(PETSC_COMM_SELF,appctx->m,&slice_vec);CHKERRQ(ierr);
@@ -452,8 +454,8 @@ PetscErrorCode RHSMatrixMatter(TS ts,PetscReal t,Vec X,Mat AA,Mat BB,void *ctx)
      Set and option to indicate that we will never add a new nonzero location
      to the matrix. If we do, it will generate an error.
   */
-  ierr = MatSetOption(A,MAT_NEW_NONZERO_LOCATION_ERR,PETSC_TRUE);CHKERRQ(ierr);
-
+  ierr = MatSetOption(A,MAT_NEW_NONZERO_LOCATION_ERR,PETSC_TRUE);CHKERRQ(ierr);   
+    
   return 0;
 }
 
