@@ -80,7 +80,6 @@ int main(int argc,char **argv)
   ierr = PetscInitialize(&argc,&argv,(char*)0,help);if (ierr) return ierr;
   ierr = MPI_Comm_size(PETSC_COMM_WORLD,&size);CHKERRQ(ierr);
   ierr = MPI_Comm_rank(PETSC_COMM_WORLD,&rank);CHKERRQ(ierr);
-  //if (size != 1) SETERRQ(PETSC_COMM_SELF,1,"This is a uniprocessor example only!");
 
   m    = 256;
   ierr = PetscOptionsGetInt(NULL,NULL,"-m",&m,NULL);CHKERRQ(ierr);
@@ -103,7 +102,6 @@ int main(int argc,char **argv)
   /*- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
      Create vector data structures for approximate solution
     - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -*/
-  //ierr = VecCreateSeq(PETSC_COMM_SELF,m,&u);CHKERRQ(ierr);
    ierr = VecCreateMPI(PETSC_COMM_WORLD,PETSC_DECIDE,m,&u); CHKERRQ(ierr);
 
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -

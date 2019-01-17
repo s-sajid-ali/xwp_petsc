@@ -1,7 +1,6 @@
 
-static char help[] ="Attempt X-ray propagation in free space based on ex3\n\
-Clear unnecesary norm checking\n\
-Solves a simple time-dependent linear PDE .\n\
+static char help[] ="X-ray propagation in free space in 2D\n\
+Solves a simple time-independent linear PDE .\n\
 Input parameters include:\n\
   -m <points>, where <points> = number of grid points\n\
   -debug              : Activate debugging printouts\n\
@@ -10,7 +9,6 @@ Input parameters include:\n\
 /*
    Concepts: TS^time-dependent linear problems
    Concepts: TS^diffusion equation
-   Processors: 1
 */
 
 /* ------------------------------------------------------------------------
@@ -18,9 +16,6 @@ Input parameters include:\n\
    This program solves the two-dimensional helmholtz equation:
        u_t = A*u_xx + A*u_yy;
    This is a linear, second-order, parabolic equation.
-
-    Uniprocessor example
-
   ------------------------------------------------------------------------- */
 
 /*
@@ -71,7 +66,7 @@ int main(int argc,char **argv)
   PetscInt       my;                     /* problem size in y*/
   PetscInt       M;                      /* mx * my */
   PetscReal      dt;                     /* For TSSetTimeStep*/
-  PetscMPIInt    size;                   /* MPI size*/
+  PetscMPIInt    size,rank;              /* MPI size and rank*/
   PetscErrorCode ierr;
 
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -80,7 +75,7 @@ int main(int argc,char **argv)
 
   ierr = PetscInitialize(&argc,&argv,(char*)0,help);if (ierr) return ierr;
   ierr = MPI_Comm_size(PETSC_COMM_WORLD,&size);CHKERRQ(ierr);
-  if (size != 1) SETERRQ(PETSC_COMM_SELF,1,"This is a uniprocessor example only!");
+  ierr = MPI_Comm_rank(PETSC_COMM_WORLD,&rank);CHKERRQ(ierr);
 
   mx  = 512;
   my  = 512;    
@@ -96,8 +91,10 @@ int main(int argc,char **argv)
   appctx.lambda      = 1.23984e-10;
   appctx.step_time   = time_total_max/time_steps_max;
 
-  ierr = PetscPrintf(PETSC_COMM_SELF,"Solving a linear TS problem on 1 processor\n");CHKERRQ(ierr);
-  ierr = PetscPrintf(PETSC_COMM_SELF,"mx : %d, my: %d lambda : %e\n",appctx.mx, appctx.my, appctx.lambda);CHKERRQ(ierr);
+  if(rank==0){
+      ierr = PetscPrintf(PETSC_COMM_SELF,"Solving a linear TS problem on 1 processor\n");CHKERRQ(ierr);
+      ierr = PetscPrintf(PETSC_COMM_SELF,"mx : %d, my: %d lambda : %e\n",appctx.mx, appctx.my, appctx.lambda);CHKERRQ(ierr);
+      }
     
     
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -113,14 +110,14 @@ int main(int argc,char **argv)
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
      Create vector data structures for approximate solutions
     - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -*/
-  ierr = VecCreateSeq(PETSC_COMM_SELF,M,&u);CHKERRQ(ierr);
+  ierr = VecCreateMPI(PETSC_COMM_WORLD,PETSC_DECIDE,M,&u); CHKERRQ(ierr);
   ierr = PetscObjectSetName((PetscObject)u, "sol_vec");CHKERRQ(ierr);
  
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
      Create timestepping solver context
      - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
-  ierr = TSCreate(PETSC_COMM_SELF,&ts);CHKERRQ(ierr);
+  ierr = TSCreate(PETSC_COMM_WORLD,&ts);CHKERRQ(ierr);
   ierr = TSSetProblemType(ts,TS_LINEAR);CHKERRQ(ierr);
 
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -133,7 +130,7 @@ int main(int argc,char **argv)
      Create matrix data structure; set matrix evaluation routine.
      - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
-  ierr = MatCreate(PETSC_COMM_SELF,&A);CHKERRQ(ierr);
+  ierr = MatCreate(PETSC_COMM_WORLD,&A);CHKERRQ(ierr);
   ierr = MatSetSizes(A,PETSC_DECIDE,PETSC_DECIDE,M,M);CHKERRQ(ierr);
   ierr = MatSetFromOptions(A);CHKERRQ(ierr);
   ierr = MatSetUp(A);CHKERRQ(ierr);
@@ -221,43 +218,31 @@ int main(int argc,char **argv)
 */
 PetscErrorCode InitialConditions(Vec u,AppCtx *appctx)
 {
-  PetscScalar    *u_localptr;
+  PetscScalar    val;
   PetscErrorCode ierr;
-  PetscInt       i,j,k;
+  PetscInt       i,row,col;
+  PetscInt       low,high;
     
-
-  /*
-    Get a pointer to vector data.
-    - For default PETSc vectors, VecGetArray() returns a pointer to
-      the data array.  Otherwise, the routine is implementation dependent.
-    - You MUST call VecRestoreArray() when you no longer need access to
-      the array.
-  */
-  ierr = VecGetArray(u,&u_localptr);CHKERRQ(ierr);
-
-  /*
-     We initialize the solution array by simply writing the solution
-     directly into the array locations.  Alternatively, we could use
-     VecSetValues() or VecSetValuesLocal().
-  */
-  for (i=0; i<appctx->mx; i++) {
-      for (j=0; j<appctx->my; j++){
-          k = i*appctx->mx+j;
-          if (i<appctx->mx*3/8){u_localptr[k] = 0+0*PETSC_i;}
-          else if (i>((appctx->mx*5/8))){u_localptr[k] = 0+0*PETSC_i;}
-          else {
-              if(j<appctx->my*3/8){u_localptr[k] = 0+0*PETSC_i;}
-              else if (j>((appctx->my*5/8))){u_localptr[k] = 0+0*PETSC_i;}
-              else {u_localptr[k] = 1+0*PETSC_i;}
-                   //ierr = PetscPrintf(PETSC_COMM_SELF,"i:%d, j : %d, k : %d\n",i,j,k);}
-              }
+  ierr = VecGetOwnershipRange(u,&low,&high); CHKERRQ(ierr);
+    
+  for (i=low; i<high; i++) {
+      row = i/appctx->mx; col = i - row*appctx->mx;
+      
+      if (row > appctx->mx*3/8 && row < appctx->mx*5/8){
+          if(col > appctx->mx*3/8 && col < appctx->mx*5/8){
+          val = 1;
+          ierr = VecSetValues(u,1,&i,&val,INSERT_VALUES);
+            }
+          }
+      else {
+          val = 0;
+          ierr = VecSetValues(u,1,&i,&val,INSERT_VALUES);
           }
       }
-  /*
-     Restore vector
-  */
-  ierr = VecRestoreArray(u,&u_localptr);CHKERRQ(ierr);
+  
 
+  ierr = VecAssemblyBegin(u);CHKERRQ(ierr);
+  ierr = VecAssemblyEnd(u);CHKERRQ(ierr);  
 
   return 0;
 }
@@ -339,7 +324,8 @@ PetscErrorCode RHSMatrixFreeSpace(TS ts,PetscReal t,Vec X,Mat AA,Mat BB,void *ct
   /*
      Set matrix rows corresponding to interior data.  We construct the
      matrix one row at a time.
-  */
+  */  
+    
   for (i=mstart; i<mend; i++) {
        loc_col = i%appctx->mx;
        loc_row = i/appctx->mx;
@@ -360,10 +346,6 @@ PetscErrorCode RHSMatrixFreeSpace(TS ts,PetscReal t,Vec X,Mat AA,Mat BB,void *ct
                  
                  ierr = MatSetValues(A,1,&i,5,idx,v,INSERT_VALUES);CHKERRQ(ierr);
                 
-                 /*if (t==0){
-                     PetscPrintf(PETSC_COMM_SELF,"i:%d, row : %d, col : %d\n",i,loc_row,loc_col);
-                     PetscPrintf(PETSC_COMM_SELF,"%d %d %d %d %d\n\n",idx[0],idx[1],idx[2],idx[3],idx[4]);
-                     }*/
                }
            }
      }
@@ -381,13 +363,13 @@ PetscErrorCode RHSMatrixFreeSpace(TS ts,PetscReal t,Vec X,Mat AA,Mat BB,void *ct
   ierr = MatAssemblyEnd(A,MAT_FINAL_ASSEMBLY);CHKERRQ(ierr);
     
     
-   
+ 
   ierr = VecCreateSeq(PETSC_COMM_SELF,appctx->mx*appctx->my,&v_diag);CHKERRQ(ierr);
   ierr = VecSet(v_diag,0+0*PETSC_i); CHKERRQ(ierr);
   ierr = MatDiagonalSet(A,v_diag,ADD_VALUES); CHKERRQ(ierr); 
   ierr = MatAssemblyBegin(A,MAT_FINAL_ASSEMBLY);CHKERRQ(ierr);
   ierr = MatAssemblyEnd(A,MAT_FINAL_ASSEMBLY);CHKERRQ(ierr);
-   
+ 
   
     
   /*
