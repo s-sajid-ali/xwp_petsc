@@ -240,15 +240,19 @@ PetscErrorCode InitialConditions(Vec u,AppCtx *appctx)
   */
   for (i=low; i<high; i++) {
       if (i>appctx->m/4 && i< 0.75*(appctx->m)){
-          val = 0;
+          val = 1;
           ierr = VecSetValues(u,1,&i,&val,INSERT_VALUES);
         }
       else {
-          val = 1;
+          val = 0;
           ierr = VecSetValues(u,1,&i,&val,INSERT_VALUES);
           }
       }
   
+
+  ierr = VecAssemblyBegin(u);CHKERRQ(ierr);
+  ierr = VecAssemblyEnd(u);CHKERRQ(ierr);
+    
   /*
      Print debugging information if desired
   */
