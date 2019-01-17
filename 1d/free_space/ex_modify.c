@@ -224,13 +224,12 @@ PetscErrorCode InitialConditions(Vec u,AppCtx *appctx)
   PetscInt       i,low,high;
   PetscScalar    val;
     
-    
+  /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+     Get local vector storage info, set values and assemble
+  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+ 
   ierr = VecGetOwnershipRange(u,&low,&high); CHKERRQ(ierr);
-  /*
-     We initialize the solution array by simply writing the solution
-     directly into the array locations.  Alternatively, we could use
-     VecSetValues() or VecSetValuesLocal().
-  */
+    
   for (i=low; i<high; i++) {
       if (i>appctx->m/4 && i< 0.75*(appctx->m)){
           val = 1;
@@ -241,7 +240,6 @@ PetscErrorCode InitialConditions(Vec u,AppCtx *appctx)
           ierr = VecSetValues(u,1,&i,&val,INSERT_VALUES);
           }
       }
-  
 
   ierr = VecAssemblyBegin(u);CHKERRQ(ierr);
   ierr = VecAssemblyEnd(u);CHKERRQ(ierr);

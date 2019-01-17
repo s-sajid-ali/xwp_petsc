@@ -7,8 +7,7 @@ Input parameters include:\n\
   -nox                : Deactivate x-window graphics\n\n";
 
 /*
-   Concepts: TS^time-dependent linear problems
-   Concepts: TS^diffusion equation
+   Concepts: TS^time-independent linear problems
 */
 
 /* ------------------------------------------------------------------------
@@ -64,7 +63,7 @@ int main(int argc,char **argv)
   PetscInt       steps;                  /* output for TSGetStepNumber */  
   PetscInt       mx;                     /* problem size in x*/
   PetscInt       my;                     /* problem size in y*/
-  PetscInt       M;                      /* mx * my */
+  PetscInt       M;                      /* total grid size : mx * my */
   PetscReal      dt;                     /* For TSSetTimeStep*/
   PetscMPIInt    size,rank;              /* MPI size and rank*/
   PetscErrorCode ierr;
@@ -103,12 +102,8 @@ int main(int argc,char **argv)
     
   ierr = PetscViewerHDF5Open(PETSC_COMM_WORLD,"solution.h5",FILE_MODE_WRITE,&appctx.hdf5_sol_viewer);CHKERRQ(ierr);
 
-  /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-     Create vector data structures
-     - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
-
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-     Create vector data structures for approximate solutions
+     Create vector data structures for solution
     - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -*/
   ierr = VecCreateMPI(PETSC_COMM_WORLD,PETSC_DECIDE,M,&u); CHKERRQ(ierr);
   ierr = PetscObjectSetName((PetscObject)u, "sol_vec");CHKERRQ(ierr);
@@ -135,11 +130,9 @@ int main(int argc,char **argv)
   ierr = MatSetFromOptions(A);CHKERRQ(ierr);
   ierr = MatSetUp(A);CHKERRQ(ierr);
 
-  /*
-    For linear problems with a time-dependent f(u,t) in the equation
-    u_t = f(u,t), the user provides the discretized right-hand-side
-    as a time-dependent matrix.
-  */
+  /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+     Set RHS function. 
+     - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
   ierr = TSSetRHSFunction(ts,NULL,TSComputeRHSFunctionLinear,&appctx);CHKERRQ(ierr);
   ierr = TSSetRHSJacobian(ts,A,A,RHSMatrixFreeSpace,&appctx);CHKERRQ(ierr);
   
@@ -223,6 +216,10 @@ PetscErrorCode InitialConditions(Vec u,AppCtx *appctx)
   PetscInt       i,row,col;
   PetscInt       low,high;
     
+  /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+     Get local vector storage info, set values and assemble
+  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+  
   ierr = VecGetOwnershipRange(u,&low,&high); CHKERRQ(ierr);
     
   for (i=low; i<high; i++) {
@@ -302,15 +299,13 @@ PetscErrorCode Monitor(TS ts,PetscInt step,PetscReal time,Vec u,void *ctx)
 */
 PetscErrorCode RHSMatrixFreeSpace(TS ts,PetscReal t,Vec X,Mat AA,Mat BB,void *ctx)
 {
-  Mat            A       = AA;                /* Jacobian matrix */
-  AppCtx         *appctx = (AppCtx*)ctx;     /* user-defined application context */
-  PetscInt       mstart  = appctx->my;
-  PetscInt       mend    = (appctx->mx-1)*appctx->my;
-  PetscErrorCode ierr;   
-  PetscInt       i,idx[5];
-  PetscInt       loc_row,loc_col;
-  PetscScalar    v[5];  
-  Vec            v_diag;
+  Mat            A       = AA;            /* Jacobian matrix */
+  AppCtx         *appctx = (AppCtx*)ctx;  /* user-defined application context */
+  PetscErrorCode ierr;                    /* error code */  
+  PetscInt       i,start,end;             /* i-> iteration number, start/end -> local row numbers */  
+  PetscInt       row,col;                    
+  PetscInt       set_row,set_col;
+  PetscScalar    v;  
   PetscComplex   prefac = (-1*PETSC_i*appctx->lambda/(4*PETSC_PI));
   PetscComplex   hx = appctx->step_grid_x;
   PetscComplex   hy = appctx->step_grid_y;  
@@ -319,58 +314,48 @@ PetscErrorCode RHSMatrixFreeSpace(TS ts,PetscReal t,Vec X,Mat AA,Mat BB,void *ct
   iteration_number = t/appctx->step_time;    
     
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-     Compute entries for the locally owned part of the matrix
+     Set matrix rows. We construct the matrix one row at a time.  
+     Logic is based on src/ksp/ksp/examples/tutorials/ex11.c
      - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
-  /*
-     Set matrix rows corresponding to interior data.  We construct the
-     matrix one row at a time.
-  */  
+  
+  ierr = MatGetOwnershipRange(A,&start,&end); CHKERRQ(ierr);  
     
-  for (i=mstart; i<mend; i++) {
-       loc_col = i%appctx->mx;
-       loc_row = i/appctx->mx;
-       if (loc_col != 0){
-           if(loc_col != appctx->my-1){
-                 
-                 idx[0] = (loc_row-1)*appctx->my + loc_col;
-                 idx[1] = loc_row*appctx->my + loc_col - 1 ;
-                 idx[2] = loc_row*appctx->my + loc_col ;
-                 idx[3] = loc_row*appctx->my + loc_col + 1 ;
-                 idx[4] = (loc_row+1)*appctx->my + loc_col ;
-                 
-                 v[0] = prefac*1/(hy*hy);
-                 v[1] = prefac*1/(hx*hx);
-                 v[2] = -prefac*2/(hx*hx)-prefac*2/(hy*hy);
-                 v[3] = prefac*1/(hx*hx);
-                 v[4] = prefac*1/(hy*hy);
-                 
-                 ierr = MatSetValues(A,1,&i,5,idx,v,INSERT_VALUES);CHKERRQ(ierr);
-                
-               }
-           }
-     }
+  for (i=start; i<end; i++) {
+      row = i/appctx->mx;
+      col = i - row*appctx->mx;
+      if (row > 0){
+          v = prefac*1/(hy*hy);
+          set_row = i; set_col = i - appctx->my;
+          ierr = MatSetValues(A,1,&set_row,1,&set_col,&v,INSERT_VALUES); CHKERRQ(ierr);
+          }
+      if (row < appctx->mx - 1){
+          v = prefac*1/(hy*hy);
+          set_row = i; set_col = i + appctx->my;
+          ierr = MatSetValues(A,1,&set_row,1,&set_col,&v,INSERT_VALUES); CHKERRQ(ierr);
+          }
+      if (col > 0){
+          v = prefac*1/(hx*hx);
+          set_row = i; set_col = i - 1;
+          ierr = MatSetValues(A,1,&set_row,1,&set_col,&v,INSERT_VALUES); CHKERRQ(ierr);
+          }
+      if (col < appctx->my - 1){
+          v = prefac*1/(hx*hx);
+          set_row = i; set_col = i + 1;
+          ierr = MatSetValues(A,1,&set_row,1,&set_col,&v,INSERT_VALUES); CHKERRQ(ierr);
+          }
+      
+      v = -prefac*2/(hx*hx)-prefac*2/(hy*hy);
+      set_row = i; set_col = i;
+      ierr = MatSetValues(A,1,&set_row,1,&set_col,&v,INSERT_VALUES); CHKERRQ(ierr);
+      
+      }
 
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
      Complete the matrix assembly process and set some options
      - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
-  /*
-     Assemble matrix, using the 2-step process:
-       MatAssemblyBegin(), MatAssemblyEnd()
-     Computations can be done while messages are in transition
-     by placing code between these two statements.
-  */
+ 
   ierr = MatAssemblyBegin(A,MAT_FINAL_ASSEMBLY);CHKERRQ(ierr);
   ierr = MatAssemblyEnd(A,MAT_FINAL_ASSEMBLY);CHKERRQ(ierr);
-    
-    
- 
-  ierr = VecCreateSeq(PETSC_COMM_SELF,appctx->mx*appctx->my,&v_diag);CHKERRQ(ierr);
-  ierr = VecSet(v_diag,0+0*PETSC_i); CHKERRQ(ierr);
-  ierr = MatDiagonalSet(A,v_diag,ADD_VALUES); CHKERRQ(ierr); 
-  ierr = MatAssemblyBegin(A,MAT_FINAL_ASSEMBLY);CHKERRQ(ierr);
-  ierr = MatAssemblyEnd(A,MAT_FINAL_ASSEMBLY);CHKERRQ(ierr);
- 
-  
     
   /*
      Set and option to indicate that we will never add a new nonzero location
