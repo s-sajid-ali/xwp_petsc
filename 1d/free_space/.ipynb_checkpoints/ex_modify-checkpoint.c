@@ -11,7 +11,6 @@ Input parameters include:\n\
    Concepts: TS^time-dependent linear problems
    Concepts: TS^heat equation
    Concepts: TS^diffusion equation
-   Processors: 1
 */
 
 /* ------------------------------------------------------------------------
@@ -76,7 +75,7 @@ int main(int argc,char **argv)
   PetscDraw      draw;                   /* drawing context */
   PetscErrorCode ierr;
   PetscInt       steps,m;
-  PetscMPIInt    size;
+  PetscMPIInt    size,rank;
   PetscReal      dt;
 
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -85,7 +84,8 @@ int main(int argc,char **argv)
 
   ierr = PetscInitialize(&argc,&argv,(char*)0,help);if (ierr) return ierr;
   ierr = MPI_Comm_size(PETSC_COMM_WORLD,&size);CHKERRQ(ierr);
-  if (size != 1) SETERRQ(PETSC_COMM_SELF,1,"This is a uniprocessor example only!");
+  ierr = MPI_Comm_rank(PETSC_COMM_WORLD,&rank);CHKERRQ(ierr);
+  //if (size != 1) SETERRQ(PETSC_COMM_SELF,1,"This is a uniprocessor example only!");
 
   m    = 256;
   ierr = PetscOptionsGetInt(NULL,NULL,"-m",&m,NULL);CHKERRQ(ierr);
@@ -96,8 +96,10 @@ int main(int argc,char **argv)
   appctx.slices    = 1000;
   appctx.lambda    = 0.12398e-9;
 
-  ierr = PetscPrintf(PETSC_COMM_SELF,"Solving a linear TS problem on 1 processor\n");CHKERRQ(ierr);
-  ierr = PetscPrintf(PETSC_COMM_SELF,"m : %d, slices : %f, lambda : %e\n",appctx.m, appctx.slices, appctx.lambda);CHKERRQ(ierr);
+  if(rank==0){
+      ierr = PetscPrintf(PETSC_COMM_SELF,"Solving a linear TS problem on 1 processor\n");CHKERRQ(ierr);
+      ierr = PetscPrintf(PETSC_COMM_SELF,"m : %d, slices : %f, lambda : %e\n",appctx.m, appctx.slices, appctx.lambda);CHKERRQ(ierr);
+  }
 
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
      Create vector data structures
@@ -106,13 +108,14 @@ int main(int argc,char **argv)
   /*- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
      Create vector data structures for approximate solution
     - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -*/
-  ierr = VecCreateSeq(PETSC_COMM_SELF,m,&u);CHKERRQ(ierr);
+  //ierr = VecCreateSeq(PETSC_COMM_SELF,m,&u);CHKERRQ(ierr);
+   ierr = VecCreateMPI(PETSC_COMM_WORLD,PETSC_DECIDE,m,&u); CHKERRQ(ierr);
 
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
      Set up display to show graph of the solution
      - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
-  ierr = PetscViewerDrawOpen(PETSC_COMM_SELF,0,"",80,380,400,160,&appctx.viewer1);CHKERRQ(ierr);
+  ierr = PetscViewerDrawOpen(PETSC_COMM_WORLD,0,"",80,380,400,160,&appctx.viewer1);CHKERRQ(ierr);
   ierr = PetscViewerDrawGetDraw(appctx.viewer1,0,&draw);CHKERRQ(ierr);
   ierr = PetscDrawSetDoubleBuffer(draw);CHKERRQ(ierr);
  
@@ -120,7 +123,7 @@ int main(int argc,char **argv)
      Create timestepping solver context
      - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
-  ierr = TSCreate(PETSC_COMM_SELF,&ts);CHKERRQ(ierr);
+  ierr = TSCreate(PETSC_COMM_WORLD,&ts);CHKERRQ(ierr);
   ierr = TSSetProblemType(ts,TS_LINEAR);CHKERRQ(ierr);
 
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -134,7 +137,7 @@ int main(int argc,char **argv)
      Create matrix data structure; set matrix evaluation routine.
      - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
-  ierr = MatCreate(PETSC_COMM_SELF,&A);CHKERRQ(ierr);
+  ierr = MatCreate(PETSC_COMM_WORLD,&A);CHKERRQ(ierr);
   ierr = MatSetSizes(A,PETSC_DECIDE,PETSC_DECIDE,m,m);CHKERRQ(ierr);
   ierr = MatSetFromOptions(A);CHKERRQ(ierr);
   ierr = MatSetUp(A);CHKERRQ(ierr);
@@ -224,37 +227,28 @@ int main(int argc,char **argv)
 */
 PetscErrorCode InitialConditions(Vec u,AppCtx *appctx)
 {
-  PetscScalar    *u_localptr;
   PetscErrorCode ierr;
-  PetscInt       i;
+  PetscInt       i,low,high;
+  PetscScalar    val;
     
-
-  /*
-    Get a pointer to vector data.
-    - For default PETSc vectors, VecGetArray() returns a pointer to
-      the data array.  Otherwise, the routine is implementation dependent.
-    - You MUST call VecRestoreArray() when you no longer need access to
-      the array.
-    - Note that the Fortran interface to VecGetArray() differs from the
-      C version.  See the users manual for details.
-  */
-  ierr = VecGetArray(u,&u_localptr);CHKERRQ(ierr);
-
+    
+  ierr = VecGetOwnershipRange(u,&low,&high); CHKERRQ(ierr);
   /*
      We initialize the solution array by simply writing the solution
      directly into the array locations.  Alternatively, we could use
      VecSetValues() or VecSetValuesLocal().
   */
-  for (i=0; i<appctx->m; i++) {
-      if (i<appctx->m/4){u_localptr[i] = 0+0*PETSC_i;}
-      else if (i>(3*(appctx->m/4))){u_localptr[i] = 0+0*PETSC_i;}
-      else {u_localptr[i] = 1+0*PETSC_i;}
+  for (i=low; i<high; i++) {
+      if (i>appctx->m/4 && i< 0.75*(appctx->m)){
+          val = 0;
+          ierr = VecSetValues(u,1,&i,&val,INSERT_VALUES);
+        }
+      else {
+          val = 1;
+          ierr = VecSetValues(u,1,&i,&val,INSERT_VALUES);
+          }
       }
-  /*
-     Restore vector
-  */
-  ierr = VecRestoreArray(u,&u_localptr);CHKERRQ(ierr);
-
+  
   /*
      Print debugging information if desired
   */
@@ -296,6 +290,7 @@ PetscErrorCode Monitor(TS ts,PetscInt step,PetscReal time,Vec u,void *ctx)
       Copy solution vector to new vector, 
       conver to absolute value for viewing
    - - - - - - - - - - - - - - - - - - - -*/
+    
   ierr = VecDuplicate(u,&u_abs);CHKERRQ(ierr);
   ierr = VecCopy(u,u_abs);CHKERRQ(ierr);
   ierr = VecAbs(u_abs);CHKERRQ(ierr);
@@ -342,8 +337,7 @@ PetscErrorCode RHSMatrixFreeSpace(TS ts,PetscReal t,Vec X,Mat AA,Mat BB,void *ct
 {
   Mat            A       = AA;                /* Jacobian matrix */
   AppCtx         *appctx = (AppCtx*)ctx;     /* user-defined application context */
-  PetscInt       mstart  = 0;
-  PetscInt       mend    = appctx->m;
+  PetscInt       low,high;
   PetscErrorCode ierr;
   PetscInt       i,idx[3];
   PetscScalar    v[3];  
@@ -352,29 +346,32 @@ PetscErrorCode RHSMatrixFreeSpace(TS ts,PetscReal t,Vec X,Mat AA,Mat BB,void *ct
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
      Compute entries for the locally owned part of the matrix
      - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
-  /*
-     Set matrix rows corresponding to boundary data
-  */
-
-  mstart = 0;
-  v[0]   = 1.0;
-  ierr   = MatSetValues(A,1,&mstart,1,&mstart,v,INSERT_VALUES);CHKERRQ(ierr);
-  mstart++;
-
-  mend--;
-  v[0] = 1.0;
-  ierr = MatSetValues(A,1,&mend,1,&mend,v,INSERT_VALUES);CHKERRQ(ierr);
+    
+  ierr = MatGetOwnershipRange(A,&low,&high); CHKERRQ(ierr); 
 
   /*
      Set matrix rows corresponding to interior data.  We construct the
      matrix one row at a time.
   */
-  v[0] = prefac*-1; v[1] = prefac*2; v[2] = prefac*-1;
-  for (i=mstart; i<mend; i++) {
-    idx[0] = i-1; idx[1] = i; idx[2] = i+1;
-    ierr   = MatSetValues(A,1,&i,3,idx,v,INSERT_VALUES);CHKERRQ(ierr);
-  }
-
+  
+  
+  for (i=low; i<high; i++) {
+    //Set matrix rows corresponding to boundary data
+    if (i == 0){
+        v[0] = 1.0;
+        ierr = MatSetValues(A,1,&i,1,&i,v,INSERT_VALUES);CHKERRQ(ierr); 
+        }
+    else if (i == appctx->m-1){
+        v[0] = 1.0;
+        ierr = MatSetValues(A,1,&i,1,&i,v,INSERT_VALUES);CHKERRQ(ierr);
+        }
+    else{
+        v[0] = prefac*-1; v[1] = prefac*2; v[2] = prefac*-1;
+        idx[0] = i-1; idx[1] = i; idx[2] = i+1;
+        ierr   = MatSetValues(A,1,&i,3,idx,v,INSERT_VALUES);CHKERRQ(ierr);
+        }
+    }
+ 
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
      Complete the matrix assembly process and set some options
      - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
@@ -384,19 +381,6 @@ PetscErrorCode RHSMatrixFreeSpace(TS ts,PetscReal t,Vec X,Mat AA,Mat BB,void *ct
      Computations can be done while messages are in transition
      by placing code between these two statements.
   */
-  ierr = MatAssemblyBegin(A,MAT_FINAL_ASSEMBLY);CHKERRQ(ierr);
-  ierr = MatAssemblyEnd(A,MAT_FINAL_ASSEMBLY);CHKERRQ(ierr);
-
-    
-  /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-     Boundary conditions.
-   - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
-  
-  PetscInt     row[2];
-  PetscScalar  rho;
-  row[0]=0; row[1]=appctx->m-1; 
-  rho = 0;
-  ierr = MatZeroRowsColumns( A, 2, row, rho, NULL,NULL ); CHKERRQ(ierr);
   ierr = MatAssemblyBegin(A,MAT_FINAL_ASSEMBLY);CHKERRQ(ierr);
   ierr = MatAssemblyEnd(A,MAT_FINAL_ASSEMBLY);CHKERRQ(ierr);
  
