@@ -1,6 +1,5 @@
 
 static char help[] ="Attempt X-ray propagation in matter based on ex3\n\
-Clear unnecesary norm checking\n\
 Solves a simple time-dependent linear PDE .\n\
 Input parameters include:\n\
   -m <points>, where <points> = number of grid points\n\
@@ -9,7 +8,6 @@ Input parameters include:\n\
 
 /*
    Concepts: TS^time-dependent linear problems
-   Concepts: TS^diffusion equation
    Processors: 1
 */
 

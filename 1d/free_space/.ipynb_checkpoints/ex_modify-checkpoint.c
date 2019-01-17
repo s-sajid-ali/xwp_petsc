@@ -1,22 +1,20 @@
 
-static char help[] ="Attempt X-ray free space propagation based on ex3\n\
-Clear unnecesary norm checking\n\
-Solves a simple time-dependent linear PDE .\n\
+static char help[] ="X-ray free space propagation\n\
+Solves a simple time-independent linear PDE .\n\
 Input parameters include:\n\
   -m <points>, where <points> = number of grid points\n\
   -debug              : Activate debugging printouts\n\
   -nox                : Deactivate x-window graphics\n\n";
 
 /*
-   Concepts: TS^time-dependent linear problems
-   Concepts: TS^heat equation
-   Concepts: TS^diffusion equation
+   Concepts: TS^time-independent linear problems
+   Concepts: TS^Helmholtz equation
 */
 
 /* ------------------------------------------------------------------------
 
    This program solves the one-dimensional helmholtz equation 
-       u_t = u_xx,
+       u_t = A*u_xx,
    This is a linear, second-order, parabolic equation.
 
    We discretize the right-hand side using finite differences with
@@ -25,9 +23,6 @@ Input parameters include:\n\
    We then demonstrate time evolution using the various TS methods by
    running the program via
        ex3 -ts_type <timestepping solver>
-
-    The parallel version of this code is ts/examples/tutorials/ex4.c
-
   ------------------------------------------------------------------------- */
 
 /*
