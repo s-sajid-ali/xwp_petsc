@@ -80,8 +80,7 @@ int main(int argc,char **argv)
   my  = 512;    
   ierr = PetscOptionsGetInt(NULL,NULL,"-mx",&mx,NULL);CHKERRQ(ierr);
   ierr = PetscOptionsGetInt(NULL,NULL,"-my",&my,NULL);CHKERRQ(ierr);  
-    
-  M = mx*my;  
+  M = mx*my;    
 
   appctx.mx          = mx;
   appctx.my          = my;  

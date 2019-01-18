@@ -1,5 +1,5 @@
 
-static char help[] ="X-ray propagation in free space in 2D\n\
+static char help[] ="X-ray propagation in matter in 2D\n\
 Solves a simple time-independent linear PDE .\n\
 Input parameters include:\n\
   -m <points>, where <points> = number of grid points\n\
@@ -43,6 +43,9 @@ typedef struct {
   PetscReal   lambda;            /* wavelength */
   PetscReal   step_time;         /* step size in time */
   PetscViewer hdf5_sol_viewer;   /* viewer to write the solution to hdf5*/
+  Mat         ref_index;         /* Matrix holding the refractive indices*/
+  Vec         slice_rid;         /* vector to hold the refractive index */
+
 } AppCtx;
 
 /*
@@ -94,6 +97,23 @@ int main(int argc,char **argv)
       ierr = PetscPrintf(PETSC_COMM_SELF,"mx : %d, my: %d lambda : %e\n",appctx.mx, appctx.my, appctx.lambda);CHKERRQ(ierr);
       }
     
+  /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+     Read the refractive index matrix and save it at appctx->ref_index
+     Create a vector to hold one refractive index of one slice at appctx->slice_rid
+     Destroy the viewer
+   - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -*/
+  PetscViewer ref_index_viewer;
+  ierr = PetscViewerBinaryOpen(PETSC_COMM_WORLD,"refractive_index_bin.dat",FILE_MODE_READ,&ref_index_viewer);
+  CHKERRQ(ierr);
+  
+  ierr = MatCreate(PETSC_COMM_WORLD,&appctx.ref_index);CHKERRQ(ierr);
+  ierr = MatSetType(appctx.ref_index,MATDENSE);CHKERRQ(ierr);
+  ierr = MatSetFromOptions(appctx.ref_index);CHKERRQ(ierr);
+  ierr = MatLoad(appctx.ref_index,ref_index_viewer);CHKERRQ(ierr);
+  ierr = PetscViewerDestroy(&ref_index_viewer);CHKERRQ(ierr);
+    
+  ierr = VecCreateMPI(PETSC_COMM_WORLD,PETSC_DECIDE,appctx->mx*appctx->my,&appctx->slice_rid);CHKERRQ(ierr);
+  
     
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
      Store solution as hdf5
@@ -133,7 +153,7 @@ int main(int argc,char **argv)
      Set RHS function. 
      - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
   ierr = TSSetRHSFunction(ts,NULL,TSComputeRHSFunctionLinear,&appctx);CHKERRQ(ierr);
-  ierr = TSSetRHSJacobian(ts,A,A,RHSMatrixFreeSpace,&appctx);CHKERRQ(ierr);
+  ierr = TSSetRHSJacobian(ts,A,A,RHSMatrixMatter,&appctx);CHKERRQ(ierr);
   
  /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
      Set solution vector and initial timestep
@@ -278,7 +298,7 @@ PetscErrorCode Monitor(TS ts,PetscInt step,PetscReal time,Vec u,void *ctx)
 }
 /* --------------------------------------------------------------------- */
 /*
-   RHSMatrixFreeSpace - User-provided routine to compute the right-hand-side
+   RHSMatrixMatter - User-provided routine to compute the right-hand-side
    matrix for the helmholtz equation.
 
    Input Parameters:
@@ -296,7 +316,7 @@ PetscErrorCode Monitor(TS ts,PetscInt step,PetscReal time,Vec u,void *ctx)
    Recall that MatSetValues() uses 0-based row and column numbers
    in Fortran as well as in C.
 */
-PetscErrorCode RHSMatrixFreeSpace(TS ts,PetscReal t,Vec X,Mat AA,Mat BB,void *ctx)
+PetscErrorCode RHSMatrixMatter(TS ts,PetscReal t,Vec X,Mat AA,Mat BB,void *ctx)
 {
   Mat            A       = AA;            /* Jacobian matrix */
   AppCtx         *appctx = (AppCtx*)ctx;  /* user-defined application context */
@@ -304,7 +324,7 @@ PetscErrorCode RHSMatrixFreeSpace(TS ts,PetscReal t,Vec X,Mat AA,Mat BB,void *ct
   PetscInt       i,start,end;             /* i-> iteration number, start/end -> local row numbers */  
   PetscInt       row,col;                    
   PetscInt       set_row,set_col;
-  PetscScalar    v;  
+  PetscScalar    v;    
   PetscComplex   prefac = (-1*PETSC_i*appctx->lambda/(4*PETSC_PI));
   PetscComplex   hx = appctx->step_grid_x;
   PetscComplex   hy = appctx->step_grid_y;  
@@ -348,6 +368,15 @@ PetscErrorCode RHSMatrixFreeSpace(TS ts,PetscReal t,Vec X,Mat AA,Mat BB,void *ct
       ierr = MatSetValues(A,1,&set_row,1,&set_col,&v,INSERT_VALUES); CHKERRQ(ierr);
       
       }
+    
+  /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+     Set the diagonal with current time dependant F, 
+     store refractive index
+   - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+    
+  if (iteration_number<appctx->m){
+      ierr = MatGetColumnVector(appctx->ref_index,appctx->slice_vec,iteration_number);CHKERRQ(ierr);}
+  ierr = MatDiagonalSet(A,slice_vec,ADD_VALUES); CHKERRQ(ierr);
 
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
      Complete the matrix assembly process and set some options

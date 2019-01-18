@@ -16,21 +16,14 @@ int main(int argc,char **args)
   PetscScalar       v;
   Vec               u;
   PetscViewer       viewer;
-  PetscScalar const *values;
-    
-  PetscInt          slice=23;
-
   ierr = PetscInitialize(&argc,&args,(char*)0,help);if (ierr) return ierr;
+  ierr = MPI_Comm_rank(PETSC_COMM_WORLD,&rank);CHKERRQ(ierr);
+  ierr = MPI_Comm_size(PETSC_COMM_WORLD,&size);CHKERRQ(ierr);
   ierr = PetscOptionsGetInt(NULL,NULL,"-m",&m,NULL);CHKERRQ(ierr);
-  ierr = PetscOptionsGetInt(NULL,NULL,"-slice",&slice,NULL);CHKERRQ(ierr);
-  char              filename[50];
-  char              slice_num[5];
-  sprintf(slice_num, "%d",slice);
-  strcpy(filename,"slice_");
-  strcat(filename, slice_num);
-  strcat(filename, ".h5");
 
   /* PART 1:  Generate vector, then write it in the given data format */
+
+ // Generate vector 
   ierr = VecCreate(PETSC_COMM_WORLD,&u);CHKERRQ(ierr);
   ierr = PetscObjectSetName((PetscObject)u, "Test_Vec");CHKERRQ(ierr);
   ierr = VecSetSizes(u,PETSC_DECIDE,m);CHKERRQ(ierr);
@@ -39,30 +32,62 @@ int main(int argc,char **args)
   ierr = VecGetLocalSize(u,&ldim);CHKERRQ(ierr);
   for (i=0; i<ldim; i++) {
     iglobal = i + low;
-    v       = 0;
+    v       = (PetscScalar)(i + low);
     ierr    = VecSetValues(u,1,&iglobal,&v,INSERT_VALUES);CHKERRQ(ierr);
   }
   ierr = VecAssemblyBegin(u);CHKERRQ(ierr);
   ierr = VecAssemblyEnd(u);CHKERRQ(ierr);
-  //ierr = VecView(u,PETSC_VIEWER_STDOUT_WORLD);CHKERRQ(ierr);
-  //ierr = PetscPrintf(PETSC_COMM_WORLD,"writing vector in hdf5 to vector.dat ...\n");CHKERRQ(ierr);
-  ierr = PetscViewerHDF5Open(PETSC_COMM_WORLD,filename,FILE_MODE_WRITE,&viewer);CHKERRQ(ierr);
+  ierr = VecView(u,PETSC_VIEWER_STDOUT_WORLD);CHKERRQ(ierr);
+
+  ierr = PetscPrintf(PETSC_COMM_WORLD,"writing vector in hdf5 to vector.dat ...\n");CHKERRQ(ierr);
+  ierr = PetscViewerHDF5Open(PETSC_COMM_WORLD,"vector.h5",FILE_MODE_WRITE,&viewer);CHKERRQ(ierr);
+
+  ierr = PetscViewerHDF5SetTimestep(viewer, 0);CHKERRQ(ierr);
   ierr = VecView(u,viewer);CHKERRQ(ierr);
-  ierr = PetscViewerDestroy(&viewer);CHKERRQ(ierr);
-  ierr = VecDestroy(&u);CHKERRQ(ierr);
-    
-    
-  /* PART 2:  Read in vector in binary format */
-  //ierr = PetscPrintf(PETSC_COMM_WORLD,"reading vector in hdf5 from vector.dat ...\n");CHKERRQ(ierr);
-  ierr = PetscViewerHDF5Open(PETSC_COMM_WORLD,filename,FILE_MODE_READ,&viewer);CHKERRQ(ierr);
-  ierr = VecCreate(PETSC_COMM_WORLD,&u);CHKERRQ(ierr);
-  ierr = PetscObjectSetName((PetscObject) u,"Test_Vec");CHKERRQ(ierr);
-  ierr = VecLoad(u,viewer);CHKERRQ(ierr);
-  ierr = PetscViewerDestroy(&viewer);CHKERRQ(ierr);
-  //ierr = VecView(u,PETSC_VIEWER_STDOUT_WORLD);CHKERRQ(ierr);
   
+  ierr = PetscViewerHDF5SetTimestep(viewer, 1);CHKERRQ(ierr);
+  ierr = VecView(u,viewer);CHKERRQ(ierr);
+ 
+  ierr = PetscViewerDestroy(&viewer);CHKERRQ(ierr);
+
   /* Free data structures */
   ierr = VecDestroy(&u);CHKERRQ(ierr);
   ierr = PetscFinalize();
   return ierr;
 }
+
+/*TEST
+
+     test:
+       nsize: 2
+       args: -binary
+
+     test:
+       suffix: 2
+       nsize: 3
+       args: -binary
+
+     test:
+       suffix: 3
+       nsize: 5
+       args: -binary
+
+     test:
+       suffix: 4
+       requires: hdf5
+       nsize: 2
+       args: -hdf5
+
+     test:
+       suffix: 5
+       nsize: 4
+       args: -binary -sizes_set
+
+     test:
+       suffix: 6
+       requires: hdf5
+       nsize: 4
+       args: -hdf5 -sizes_set
+
+
+TEST*/
