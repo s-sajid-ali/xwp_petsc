@@ -8,10 +8,6 @@ Input parameters include:\n\
   -prop_steps    : number of propagation steps\n\
   -step_grid_x/y : pixel size in x and y\n\n";
 
-/*
-   Concepts: TS^time-independent linear problems
-*/
-
 /* ------------------------------------------------------------------------
    This program solves the two-dimensional helmholtz equation:
    
@@ -21,11 +17,15 @@ Input parameters include:\n\
 /*
    Include "petscts.h" so that we can use TS solvers.  Note that this file
    automatically includes:
-     petscsys.h       - base PETSc routines   petscvec.h  - vectors
-     petscmat.h  - matrices
-     petscis.h     - index sets            petscksp.h  - Krylov subspace methods
-     petscviewer.h - viewers               petscpc.h   - preconditioners
-     petscksp.h   - linear solvers        petscsnes.h - nonlinear solvers
+     petscsys.h     - base PETSc routines  
+     petscvec.h     - vectors
+     petscmat.h     - matrices
+     petscis.h      - index sets            
+     petscksp.h     - Krylov subspace methods
+     petscpc.h      - preconditioners
+     petscviewer.h  - viewers               
+     petscksp.h     - linear solvers
+     petscsnes.h    - nonlinear solvers
 */
 
 #include <petscts.h>
@@ -105,10 +105,10 @@ int main(int argc,char **argv)
 
   if(rank==0){
       ierr = PetscPrintf(PETSC_COMM_SELF,
-                         "Solving a linear TS problem on 1 processor\n");
+                         "Solving a linear TS problem on %d processors\n",size);
       CHKERRQ(ierr);
-      ierr = PetscPrintf(PETSC_COMM_SELF,"mx : %d, my: %d lambda : %e\n",
-                         appctx.mx, appctx.my, appctx.lambda);CHKERRQ(ierr);
+      ierr = PetscPrintf(PETSC_COMM_SELF,"mx : %d, my: %d, energy(in eV) : %e\n",
+                         appctx.mx, appctx.my, appctx.energy);CHKERRQ(ierr);
       }
     
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -117,7 +117,8 @@ int main(int argc,char **argv)
      Destroy the viewer
    - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -*/
   PetscViewer ref_index_viewer;
-  ierr = PetscViewerBinaryOpen(PETSC_COMM_WORLD,"refractive_index_bin.dat",FILE_MODE_READ,&ref_index_viewer);
+  ierr = PetscViewerBinaryOpen(PETSC_COMM_WORLD,"refractive_index_bin.dat",
+                               FILE_MODE_READ,&ref_index_viewer);
   CHKERRQ(ierr);
   
   ierr = MatCreate(PETSC_COMM_WORLD,&appctx.ref_index);CHKERRQ(ierr);
@@ -213,8 +214,11 @@ int main(int argc,char **argv)
 
   ierr = TSDestroy(&ts);CHKERRQ(ierr);
   ierr = MatDestroy(&A);CHKERRQ(ierr);
+  ierr = MatDestroy(&appctx.ref_index);CHKERRQ(ierr);
   ierr = VecDestroy(&u);CHKERRQ(ierr);
+  ierr = VecDestroy(&appctx.slice_rid);CHKERRQ(ierr);
   ierr = PetscViewerDestroy(&appctx.hdf5_sol_viewer);CHKERRQ(ierr);
+  
     
   /*
      Always call PetscFinalize() before exiting a program.  This routine
