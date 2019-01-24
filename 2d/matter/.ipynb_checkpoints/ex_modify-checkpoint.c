@@ -84,7 +84,8 @@ int main(int argc,char **argv)
   M = appctx.mx*appctx.my; 
 
   appctx.energy    = 25000;  
-  ierr = PetscOptionsGetReal(NULL,NULL,"-energy",&appctx.energy,NULL);CHKERRQ(ierr);    
+  ierr = PetscOptionsGetReal(NULL,NULL,"-energy",&appctx.energy,NULL);
+    CHKERRQ(ierr);    
   appctx.lambda      = (1239.84/appctx.energy)*1e-9;
 
   prop_distance   = 1e-7;
@@ -94,15 +95,20 @@ int main(int argc,char **argv)
   ierr = PetscOptionsGetInt(NULL,NULL,"-prop_steps",&prop_steps,NULL);CHKERRQ(ierr);      
     
   appctx.step_grid_x = 3.92156862745098e-10;   
-  appctx.step_grid_y = 3.92156862745098e-10;   
-  ierr = PetscOptionsGetReal(NULL,NULL,"-step_grid_x",&appctx.step_grid_x,NULL);CHKERRQ(ierr);    
-  ierr = PetscOptionsGetReal(NULL,NULL,"-step_grid_y",&appctx.step_grid_y,NULL);CHKERRQ(ierr);        
+  appctx.step_grid_y = 3.92156862745098e-10;     
+  ierr = PetscOptionsGetReal(NULL,NULL,"-step_grid_x",
+                             &appctx.step_grid_x,NULL);CHKERRQ(ierr);    
+  ierr = PetscOptionsGetReal(NULL,NULL,"-step_grid_y",
+                             &appctx.step_grid_y,NULL);CHKERRQ(ierr);        
     
   appctx.step_time   = prop_distance/prop_steps;
 
   if(rank==0){
-      ierr = PetscPrintf(PETSC_COMM_SELF,"Solving a linear TS problem on 1 processor\n");CHKERRQ(ierr);
-      ierr = PetscPrintf(PETSC_COMM_SELF,"mx : %d, my: %d lambda : %e\n",appctx.mx, appctx.my, appctx.lambda);CHKERRQ(ierr);
+      ierr = PetscPrintf(PETSC_COMM_SELF,
+                         "Solving a linear TS problem on 1 processor\n");
+      CHKERRQ(ierr);
+      ierr = PetscPrintf(PETSC_COMM_SELF,"mx : %d, my: %d lambda : %e\n",
+                         appctx.mx, appctx.my, appctx.lambda);CHKERRQ(ierr);
       }
     
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
