@@ -41,9 +41,9 @@ typedef struct {
   PetscReal   step_grid_x;       /* grid spacing in x */
   PetscReal   step_grid_y;       /* grid spacing in y */  
   PetscReal   lambda;            /* wavelength */
-  PetscReal   energy;            /* energy in ev */  
   PetscReal   step_time;         /* step size in time */
   PetscViewer hdf5_sol_viewer;   /* viewer to write the solution to hdf5*/
+  PetscViewer hdf5_rid_viewer; /* viewer to write the ref index to hdf5, for debugging*/
   Mat         ref_index;         /* Matrix holding the refractive indices*/
   Vec         slice_rid;         /* vector to hold the refractive index */
 
@@ -63,8 +63,10 @@ int main(int argc,char **argv)
   Mat            A;                      /* matrix data structure */
   Vec            u;                      /* approximate solution vector */
   PetscReal      time_total_max = 1e-7;  /* default max total time */
-  PetscInt       time_steps_max = 255;   /* default max timesteps */
+  PetscInt       time_steps_max = 255;  /* default max timesteps */
   PetscInt       steps;                  /* output for TSGetStepNumber */  
+  PetscInt       mx;                     /* problem size in x*/
+  PetscInt       my;                     /* problem size in y*/
   PetscInt       M;                      /* total grid size : mx * my */
   PetscReal      dt;                     /* For TSSetTimeStep*/
   PetscMPIInt    size,rank;              /* MPI size and rank*/
@@ -78,18 +80,17 @@ int main(int argc,char **argv)
   ierr = MPI_Comm_size(PETSC_COMM_WORLD,&size);CHKERRQ(ierr);
   ierr = MPI_Comm_rank(PETSC_COMM_WORLD,&rank);CHKERRQ(ierr);
 
-  appctx.mx          = 255;
-  appctx.my          = 255;  
-  ierr = PetscOptionsGetInt(NULL,NULL,"-mx",&appctx.mx,NULL);CHKERRQ(ierr);
-  ierr = PetscOptionsGetInt(NULL,NULL,"-my",&appctx.my,NULL);CHKERRQ(ierr);  
-  M = appctx.mx*appctx.my; 
+  mx  = 255;
+  my  = 255;    
+  ierr = PetscOptionsGetInt(NULL,NULL,"-mx",&mx,NULL);CHKERRQ(ierr);
+  ierr = PetscOptionsGetInt(NULL,NULL,"-my",&my,NULL);CHKERRQ(ierr);  
+  M = mx*my;    
 
-  appctx.energy      = 25000;  
-  ierr = PetscOptionsGetReal(NULL,NULL,"-energy",&appctx.energy,NULL);CHKERRQ(ierr);    
-  appctx.lambda      = (1239.84/appctx.energy)*1e-9;
-    
+  appctx.mx          = mx;
+  appctx.my          = my;  
   appctx.step_grid_x = 3.92156862745098e-10; 
-  appctx.step_grid_y = 3.92156862745098e-10;  
+  appctx.step_grid_y = 3.92156862745098e-10;   
+  appctx.lambda      = 4.95936e-11;
   appctx.step_time   = time_total_max/time_steps_max;
 
   if(rank==0){
@@ -121,6 +122,12 @@ int main(int argc,char **argv)
     
   ierr = PetscViewerHDF5Open(PETSC_COMM_WORLD,"solution.h5",FILE_MODE_WRITE,&appctx.hdf5_sol_viewer);CHKERRQ(ierr);
     
+  /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+   Store ref index as hdf5
+    - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+    
+ierr = PetscViewerHDF5Open(PETSC_COMM_WORLD,"rid.h5",FILE_MODE_WRITE,&appctx.hdf5_rid_viewer);CHKERRQ(ierr);
+
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
      Create vector data structures for solution
     - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -*/
@@ -146,6 +153,7 @@ int main(int argc,char **argv)
 
   ierr = MatCreate(PETSC_COMM_WORLD,&A);CHKERRQ(ierr);
   ierr = MatSetSizes(A,PETSC_DECIDE,PETSC_DECIDE,M,M);CHKERRQ(ierr);
+  //ierr = MatSetType(A, MATDENSE);
   ierr = MatSetFromOptions(A);CHKERRQ(ierr);
   ierr = MatSetUp(A);CHKERRQ(ierr);
 
@@ -207,7 +215,8 @@ int main(int argc,char **argv)
   ierr = MatDestroy(&A);CHKERRQ(ierr);
   ierr = VecDestroy(&u);CHKERRQ(ierr);
   ierr = PetscViewerDestroy(&appctx.hdf5_sol_viewer);CHKERRQ(ierr);
-    
+  ierr = PetscViewerDestroy(&appctx.hdf5_rid_viewer);CHKERRQ(ierr);
+
   /*
      Always call PetscFinalize() before exiting a program.  This routine
        - finalizes the PETSc libraries as well as MPI
@@ -275,14 +284,23 @@ PetscErrorCode Monitor(TS ts,PetscInt step,PetscReal time,Vec u,void *ctx)
 {
   AppCtx         *appctx = (AppCtx*) ctx;   /* user-defined application context */
   PetscErrorCode ierr;
+  PetscReal      dt,dttol;
   PetscInt       iteration_number;
+  Vec            rid;
   iteration_number = time/appctx->step_time;    
   
     
     
   ierr = PetscViewerHDF5SetTimestep(appctx->hdf5_sol_viewer, iteration_number);CHKERRQ(ierr);
   ierr = VecView(u,appctx->hdf5_sol_viewer);CHKERRQ(ierr);
-
+    
+  ierr = VecDuplicate(u,&rid);CHKERRQ(ierr);
+  if (iteration_number<255){
+      ierr = MatGetColumnVector(appctx->ref_index,rid,iteration_number);CHKERRQ(ierr);}  
+  ierr = PetscObjectSetName((PetscObject)rid, "rid_vec");CHKERRQ(ierr);
+  ierr = PetscViewerHDF5SetTimestep(appctx->hdf5_rid_viewer, iteration_number);CHKERRQ(ierr);
+  ierr = VecView(rid,appctx->hdf5_rid_viewer);CHKERRQ(ierr);
+  ierr = VecDestroy(&rid);CHKERRQ(ierr);  
     
   return 0;
 }

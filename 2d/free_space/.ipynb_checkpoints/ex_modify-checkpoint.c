@@ -131,10 +131,11 @@ int main(int argc,char **argv)
 
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
      Set RHS function. 
-     - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+     - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */     
+  RHSMatrixFreeSpace(ts,0.0,u,A,A,&appctx);
   ierr = TSSetRHSFunction(ts,NULL,TSComputeRHSFunctionLinear,&appctx);CHKERRQ(ierr);
-  ierr = TSSetRHSJacobian(ts,A,A,RHSMatrixFreeSpace,&appctx);CHKERRQ(ierr);
-  
+  ierr = TSSetRHSJacobian(ts,A,A,TSComputeRHSJacobianConstant,&appctx);
+    
  /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
      Set solution vector and initial timestep
  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
@@ -308,9 +309,7 @@ PetscErrorCode RHSMatrixFreeSpace(TS ts,PetscReal t,Vec X,Mat AA,Mat BB,void *ct
   PetscComplex   prefac = (-1*PETSC_i*appctx->lambda/(4*PETSC_PI));
   PetscComplex   hx = appctx->step_grid_x;
   PetscComplex   hy = appctx->step_grid_y;  
-  
-  PetscInt iteration_number;
-  iteration_number = t/appctx->step_time;    
+ 
     
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
      Set matrix rows. We construct the matrix one row at a time.  
@@ -318,33 +317,36 @@ PetscErrorCode RHSMatrixFreeSpace(TS ts,PetscReal t,Vec X,Mat AA,Mat BB,void *ct
      - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
   
   ierr = MatGetOwnershipRange(A,&start,&end); CHKERRQ(ierr);  
-    
   for (i=start; i<end; i++) {
       row = i/appctx->mx;
       col = i - row*appctx->mx;
-      if (row > 0){
+      if (row > 1){
           v = prefac*1/(hy*hy);
           set_row = i; set_col = i - appctx->my;
           ierr = MatSetValues(A,1,&set_row,1,&set_col,&v,INSERT_VALUES); CHKERRQ(ierr);
           }
-      if (row < appctx->mx - 1){
+      if (row < appctx->mx - 2){
           v = prefac*1/(hy*hy);
           set_row = i; set_col = i + appctx->my;
           ierr = MatSetValues(A,1,&set_row,1,&set_col,&v,INSERT_VALUES); CHKERRQ(ierr);
           }
-      if (col > 0){
+      if (col > 1){
           v = prefac*1/(hx*hx);
           set_row = i; set_col = i - 1;
           ierr = MatSetValues(A,1,&set_row,1,&set_col,&v,INSERT_VALUES); CHKERRQ(ierr);
           }
-      if (col < appctx->my - 1){
+      if (col < appctx->my - 2){
           v = prefac*1/(hx*hx);
           set_row = i; set_col = i + 1;
           ierr = MatSetValues(A,1,&set_row,1,&set_col,&v,INSERT_VALUES); CHKERRQ(ierr);
           }
       
-      v = -prefac*2/(hx*hx)-prefac*2/(hy*hy);
       set_row = i; set_col = i;
+      if( row==0 || row==appctx->mx -1 || col==0 || col==appctx->my -1){
+          v = 1;
+          }
+      else{v = -prefac*2/(hx*hx)-prefac*2/(hy*hy);}
+
       ierr = MatSetValues(A,1,&set_row,1,&set_col,&v,INSERT_VALUES); CHKERRQ(ierr);
       
       }
