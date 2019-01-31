@@ -46,12 +46,14 @@ typedef struct {
   PetscViewer hdf5_sol_viewer;   /* viewer to write the solution to hdf5*/
   Mat         ref_index;         /* Matrix holding the refractive indices*/
   Vec         slice_rid;         /* vector to hold the refractive index */
+  Vec         base_diag;         /* vector to hold the diag at t=0 */
 
 } AppCtx;
 
 /*
    User-defined routines
 */
+extern PetscErrorCode InitialMatrix(Mat,AppCtx*);
 extern PetscErrorCode InitialConditions(Vec,AppCtx*);
 extern PetscErrorCode RHSMatrixMatter(TS,PetscReal,Vec,Mat,Mat,void*);
 extern PetscErrorCode Monitor(TS,PetscInt,PetscReal,Vec,void*);
@@ -67,6 +69,7 @@ int main(int argc,char **argv)
   PetscInt       steps;                  /* output for TSGetStepNumber */  
   PetscInt       M;                      /* total grid size : mx * my */
   PetscMPIInt    size,rank;              /* MPI size and rank*/
+  PetscBool      ts_jac_reuse = true;    /* for TSRHSJacobianSetReuse*/
   PetscErrorCode ierr;
 
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -86,7 +89,7 @@ int main(int argc,char **argv)
   appctx.energy    = 25000;  
   ierr = PetscOptionsGetReal(NULL,NULL,"-energy",&appctx.energy,NULL);
     CHKERRQ(ierr);    
-  appctx.lambda      = (1239.84/appctx.energy)*1e-9;
+  appctx.lambda    = (1239.84/appctx.energy)*1e-9;
 
   prop_distance   = 1e-7;
   ierr = PetscOptionsGetReal(NULL,NULL,"-prop_distance",&prop_distance,NULL);CHKERRQ(ierr);    
@@ -114,6 +117,7 @@ int main(int argc,char **argv)
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
      Read the refractive index matrix and save it at appctx->ref_index
      Create a vector to hold refractive index of one slice at appctx->slice_rid
+     Create a vector to hold diag at t=0 at appctx->base_diag
      Destroy the viewer
    - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -*/
   PetscViewer ref_index_viewer;
@@ -129,6 +133,9 @@ int main(int argc,char **argv)
     
   ierr = VecCreateMPI(PETSC_COMM_WORLD,PETSC_DECIDE,
                       appctx.mx*appctx.my,&appctx.slice_rid);CHKERRQ(ierr);
+    
+  ierr = VecCreateMPI(PETSC_COMM_WORLD,PETSC_DECIDE,
+                      appctx.mx*appctx.my,&appctx.base_diag);CHKERRQ(ierr);  
     
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
      Store solution as hdf5
@@ -165,6 +172,7 @@ int main(int argc,char **argv)
   ierr = MatSetFromOptions(A);CHKERRQ(ierr);
   ierr = MatSetUp(A);CHKERRQ(ierr);
 
+  ierr = InitialMatrix(A,&appctx);  
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
      Set time dependent linear RHS function. 
      - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
@@ -186,6 +194,7 @@ int main(int argc,char **argv)
   ierr = TSSetExactFinalTime(ts,TS_EXACTFINALTIME_STEPOVER);CHKERRQ(ierr);
   ierr = TSSetFromOptions(ts);CHKERRQ(ierr);
 
+  ierr =  TSRHSJacobianSetReuse(ts,ts_jac_reuse); CHKERRQ(ierr);  
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
      Solve the problem
      - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
@@ -217,6 +226,7 @@ int main(int argc,char **argv)
   ierr = MatDestroy(&appctx.ref_index);CHKERRQ(ierr);
   ierr = VecDestroy(&u);CHKERRQ(ierr);
   ierr = VecDestroy(&appctx.slice_rid);CHKERRQ(ierr);
+  ierr = VecDestroy(&appctx.base_diag);CHKERRQ(ierr);
   ierr = PetscViewerDestroy(&appctx.hdf5_sol_viewer);CHKERRQ(ierr);
   
     
@@ -229,6 +239,88 @@ int main(int argc,char **argv)
   ierr = PetscFinalize();
   return ierr;
 }
+
+
+/* --------------------------------------------------------------------- */
+/*
+   InitialMatrix - Computes the matrix at the initial time, saves the
+                   diagonal of the matrix.
+
+   Input Parameter:
+   A - Jacobian amtrix
+   appctx - user-defined application context
+*/
+
+PetscErrorCode InitialMatrix(Mat A,AppCtx* appctx)
+{
+    
+  PetscErrorCode ierr;                    /* error code */  
+  PetscInt       i,start,end;             /* i-> iteration number, start/end -> local row numbers */  
+  PetscScalar    v;                       /* used to set matrix entries */
+  PetscInt       row,col;                    
+  PetscInt       set_row,set_col;
+  PetscInt       Mx = appctx->mx;
+  PetscInt       My = appctx->my;
+  PetscReal      hx = appctx->step_grid_x;
+  PetscReal      hy = appctx->step_grid_y;  
+  PetscComplex   prefac = (-1*PETSC_i*appctx->lambda/(4*PETSC_PI));
+ 
+   ierr = MatGetOwnershipRange(A,&start,&end); CHKERRQ(ierr);  
+    
+  for (i=start; i<end; i++) {
+      row = i/Mx;
+      col = i - row*Mx;
+      if (row>0 && row<Mx-1 && col!=0 && col!=My-1){
+          v = prefac*1/(hy*hy);
+          set_row = i; set_col = i - My;
+          ierr = MatSetValues(A,1,&set_row,1,&set_col,&v,INSERT_VALUES);
+          CHKERRQ(ierr);
+          }
+      if (row>0 && row<Mx-1 && col!=0 && col!=My-1){
+          v = prefac*1/(hy*hy);
+          set_row = i; set_col = i + My;
+          ierr = MatSetValues(A,1,&set_row,1,&set_col,&v,INSERT_VALUES);
+          CHKERRQ(ierr);
+          }
+      if (col>0 && col<My-1 && row!=0 && row!=Mx-1){
+          v = prefac*1/(hx*hx);
+          set_row = i; set_col = i - 1;
+          ierr = MatSetValues(A,1,&set_row,1,&set_col,&v,INSERT_VALUES);
+          CHKERRQ(ierr);
+          }
+      if (col>0 && col<My-1 && row!=0 && row!=Mx-1){
+          v = prefac*1/(hx*hx);
+          set_row = i; set_col = i + 1;
+          ierr = MatSetValues(A,1,&set_row,1,&set_col,&v,INSERT_VALUES);
+          CHKERRQ(ierr);
+          }
+      
+      set_row = i; set_col = i;
+      if( row==0 || row==appctx->mx -1 || col==0 || col==appctx->my -1){
+          v = 1;
+          }
+      else{v = -prefac*2/(hx*hx)-prefac*2/(hy*hy);}
+
+      ierr = MatSetValues(A,1,&set_row,1,&set_col,&v,INSERT_VALUES);
+      CHKERRQ(ierr);
+      }
+  /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+     Complete the matrix assembly process and set some options
+     - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+  ierr = MatAssemblyBegin(A,MAT_FINAL_ASSEMBLY);CHKERRQ(ierr);
+  ierr = MatAssemblyEnd(A,MAT_FINAL_ASSEMBLY);CHKERRQ(ierr);
+  
+  /*Set and option to indicate that we will never add a new nonzero location
+    to the matrix. If we do, it will generate an error.*/
+  ierr = MatSetOption(A,MAT_NEW_NONZERO_LOCATION_ERR,PETSC_TRUE);CHKERRQ(ierr);   
+    
+  ierr = MatGetDiagonal(A,appctx->base_diag); CHKERRQ(ierr);
+    
+  return 0;  
+}
+
+
+
 /* --------------------------------------------------------------------- */
 /*
    InitialConditions - Computes the solution at the initial time.
@@ -283,7 +375,7 @@ PetscErrorCode Monitor(TS ts,PetscInt step,PetscReal time,Vec u,void *ctx)
   PetscErrorCode ierr;
   PetscInt       iteration_number;
   iteration_number = time/appctx->step_time;    
-    
+
   ierr = PetscViewerHDF5SetTimestep(appctx->hdf5_sol_viewer,
                                     iteration_number);CHKERRQ(ierr);
   ierr = VecView(u,appctx->hdf5_sol_viewer);CHKERRQ(ierr);
@@ -313,91 +405,27 @@ PetscErrorCode RHSMatrixMatter(TS ts,PetscReal t,Vec X,Mat AA,Mat BB,void *ctx)
   Mat            A       = AA;            /* Jacobian matrix */
   AppCtx         *appctx = (AppCtx*)ctx;  /* user-defined application context */
   PetscErrorCode ierr;                    /* error code */  
-  PetscInt       i,start,end;             /* i-> iteration number, start/end -> local row numbers */  
-  PetscScalar    v;                       /* used to set matrix entries */
-  PetscInt       row,col;                    
-  PetscInt       set_row,set_col;
-  PetscInt       Mx = appctx->mx;
-  PetscInt       My = appctx->my;
-  PetscReal      hx = appctx->step_grid_x;
-  PetscReal      hy = appctx->step_grid_y;  
-  PetscComplex   prefac = (-1*PETSC_i*appctx->lambda/(4*PETSC_PI));
-  
-  
-  PetscInt iteration_number;
+  PetscInt iteration_number;              /* get current iteration number */
   iteration_number = t/appctx->step_time;    
   
-  /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-     Set matrix rows. We construct the matrix one row at a time.  
-     Logic is based on src/ksp/ksp/examples/tutorials/ex11.c
-     - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
-  
-  ierr = MatGetOwnershipRange(A,&start,&end); CHKERRQ(ierr);  
-    
-  for (i=start; i<end; i++) {
-      row = i/Mx;
-      col = i - row*Mx;
-      if (row>0 && row<Mx-1 && col!=0 && col!=My-1){
-          v = prefac*1/(hy*hy);
-          set_row = i; set_col = i - My;
-          ierr = MatSetValues(A,1,&set_row,1,&set_col,&v,INSERT_VALUES);
-          CHKERRQ(ierr);
-          }
-      if (row>0 && row<Mx-1 && col!=0 && col!=My-1){
-          v = prefac*1/(hy*hy);
-          set_row = i; set_col = i + My;
-          ierr = MatSetValues(A,1,&set_row,1,&set_col,&v,INSERT_VALUES);
-          CHKERRQ(ierr);
-          }
-      if (col>0 && col<My-1 && row!=0 && row!=Mx-1){
-          v = prefac*1/(hx*hx);
-          set_row = i; set_col = i - 1;
-          ierr = MatSetValues(A,1,&set_row,1,&set_col,&v,INSERT_VALUES);
-          CHKERRQ(ierr);
-          }
-      if (col>0 && col<My-1 && row!=0 && row!=Mx-1){
-          v = prefac*1/(hx*hx);
-          set_row = i; set_col = i + 1;
-          ierr = MatSetValues(A,1,&set_row,1,&set_col,&v,INSERT_VALUES);
-          CHKERRQ(ierr);
-          }
-      
-      set_row = i; set_col = i;
-      if( row==0 || row==appctx->mx -1 || col==0 || col==appctx->my -1){
-          v = 1;
-          }
-      else{v = -prefac*2/(hx*hx)-prefac*2/(hy*hy);}
 
-      ierr = MatSetValues(A,1,&set_row,1,&set_col,&v,INSERT_VALUES);
-      CHKERRQ(ierr);
-      }
-  
-  
-  ierr = MatAssemblyBegin(A,MAT_FINAL_ASSEMBLY);CHKERRQ(ierr);
-  ierr = MatAssemblyEnd(A,MAT_FINAL_ASSEMBLY);CHKERRQ(ierr);  
-    
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-     Set the diagonal with current time dependant F, 
-     store refractive index
+     Insert the diagonal from initial time,
+     Add to it the current time dependant F
    - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+  ierr = MatDiagonalSet(A,appctx->base_diag,INSERT_VALUES);CHKERRQ(ierr);  
+    
   if (iteration_number<255){
       ierr = MatGetColumnVector(appctx->ref_index,
                                 appctx->slice_rid,iteration_number);
       CHKERRQ(ierr);}
   ierr = MatDiagonalSet(A,appctx->slice_rid,ADD_VALUES);CHKERRQ(ierr);
-
+    
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
      Complete the matrix assembly process and set some options
      - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
- 
   ierr = MatAssemblyBegin(A,MAT_FINAL_ASSEMBLY);CHKERRQ(ierr);
   ierr = MatAssemblyEnd(A,MAT_FINAL_ASSEMBLY);CHKERRQ(ierr);
-    
-  /*
-     Set and option to indicate that we will never add a new nonzero location
-     to the matrix. If we do, it will generate an error.
-  */
-  ierr = MatSetOption(A,MAT_NEW_NONZERO_LOCATION_ERR,PETSC_TRUE);CHKERRQ(ierr);   
     
   return 0;
 }
