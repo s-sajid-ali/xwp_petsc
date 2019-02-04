@@ -62,6 +62,7 @@ int main(int argc,char **argv)
 {
   AppCtx         appctx;                 /* user-defined application context */
   TS             ts;                     /* timestepping context */
+  KSP            ksp;                    /* Krylov solver context */  
   Mat            A;                      /* matrix data structure */
   Vec            u;                      /* approximate solution vector */
   PetscReal      prop_distance;          /* propagation distance */
@@ -94,7 +95,7 @@ int main(int argc,char **argv)
   prop_distance   = 2e-6;
   ierr = PetscOptionsGetReal(NULL,NULL,"-prop_distance",&prop_distance,NULL);CHKERRQ(ierr);    
   
-  prop_steps      = 10;
+  prop_steps      = 4;
   ierr = PetscOptionsGetInt(NULL,NULL,"-prop_steps",&prop_steps,NULL);CHKERRQ(ierr);      
     
   appctx.step_grid_x = 1.5e-8;   
@@ -194,7 +195,12 @@ int main(int argc,char **argv)
   ierr = TSSetExactFinalTime(ts,TS_EXACTFINALTIME_STEPOVER);CHKERRQ(ierr);
   ierr = TSSetFromOptions(ts);CHKERRQ(ierr);
 
-  ierr =  TSRHSJacobianSetReuse(ts,ts_jac_reuse); CHKERRQ(ierr);  
+  ierr = TSRHSJacobianSetReuse(ts,ts_jac_reuse); CHKERRQ(ierr);  
+    
+  ierr = TSGetKSP(ts, &ksp); CHKERRQ(ierr);
+    
+  PetscReal abstol = 1e-12;  
+  ierr = KSPSetTolerances(ksp,PETSC_DEFAULT,abstol,PETSC_DEFAULT,PETSC_DEFAULT);CHKERRQ(ierr);
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
      Solve the problem
      - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
