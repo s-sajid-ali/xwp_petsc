@@ -1,5 +1,5 @@
 
-static char help[] ="X-ray free space propagation\n\
+static char help[] ="X-ray propagation in matter in 1D\n\
 Solves a simple time-independent linear PDE .\n\
 Input parameters include:\n\
   -m <points>, where <points> = number of grid points\n\
@@ -14,7 +14,7 @@ Input parameters include:\n\
 /* ------------------------------------------------------------------------
 
    This program solves the one-dimensional helmholtz equation 
-       u_t = A*u_xx,
+       u_t = A*u_xx + F_t*u,
    This is a linear, second-order, parabolic equation.
 
    We discretize the right-hand side using finite differences with
@@ -37,6 +37,7 @@ Input parameters include:\n\
 
 #include <petscts.h>
 #include <petscdraw.h>
+#include <petscviewerhdf5.h>
 
 /*
    User-defined application context - contains data needed by the
@@ -45,11 +46,13 @@ Input parameters include:\n\
 typedef struct {
   PetscInt    m;                 /* total number of grid points */
   PetscReal   step_grid;         /* grid spacing */
+  PetscReal   step_time;         /* step size in time */
   PetscReal   slices;            /* number of slices through object */
   PetscReal   lambda;            /* wavelength */
   PetscBool   debug;             /* flag (1 indicates activation of debugging printouts) */
-  PetscViewer viewer1;           /* viewers for the solution and error */
-  Mat         A;                 /* RHS mat, used with IFunction interface */
+  Mat         A;                 /* RHS mat*/
+  Vec         slice_rid;         /* vector to hold the refractive index */
+  PetscViewer hdf5_sol_viewer;   /* viewer to write the solution to hdf5*/
 } AppCtx;
 
 /*
@@ -65,9 +68,8 @@ int main(int argc,char **argv)
   TS             ts;                     /* timestepping context */
   Mat            A;                      /* matrix data structure */
   Vec            u;                      /* approximate solution vector */
-  PetscReal      time_total_max = 1e-5;  /* default max total time */
-  PetscInt       time_steps_max = 250;   /* default max timesteps */
-  PetscDraw      draw;                   /* drawing context */
+  PetscReal      prop_distance;          /* propagation distance */
+  PetscInt prop_steps; /* number of steps for propagation */
   PetscErrorCode ierr;
   PetscInt       steps,m;
   PetscMPIInt    size,rank;
@@ -81,14 +83,22 @@ int main(int argc,char **argv)
   ierr = MPI_Comm_size(PETSC_COMM_WORLD,&size);CHKERRQ(ierr);
   ierr = MPI_Comm_rank(PETSC_COMM_WORLD,&rank);CHKERRQ(ierr);
 
-  m    = 256;
+  m    = 25000;
   ierr = PetscOptionsGetInt(NULL,NULL,"-m",&m,NULL);CHKERRQ(ierr);
   ierr = PetscOptionsHasName(NULL,NULL,"-debug",&appctx.debug);CHKERRQ(ierr);
 
   appctx.m         = m;
-  appctx.step_grid = 1e-9;  
-  appctx.slices    = 1000;
-  appctx.lambda    = 0.12398e-9;
+  appctx.step_grid = 2e-9;  
+  appctx.lambda    = 1.23984e-10;
+    
+    
+  prop_distance   = 6e-6;
+  ierr = PetscOptionsGetReal(NULL,NULL,"-prop_distance",&prop_distance,NULL);CHKERRQ(ierr);    
+  
+  prop_steps      = 4;
+  ierr = PetscOptionsGetInt(NULL,NULL,"-prop_steps",&prop_steps,NULL);CHKERRQ(ierr);      
+ 
+  appctx.step_time = prop_distance/prop_steps;  
 
   if(rank==0){
       ierr = PetscPrintf(PETSC_COMM_SELF,"Solving a linear TS problem on 1 processor\n");CHKERRQ(ierr);
@@ -96,22 +106,36 @@ int main(int argc,char **argv)
   }
 
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-     Create vector data structures
+     Create a vector to hold refractive index at appctx->slice_rid
+     Destroy the viewer
      - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+  PetscViewer hdf_ref_index_viewer;
+  ierr = PetscViewerHDF5Open(PETSC_COMM_WORLD,"grating_ref_index.h5",
+                             FILE_MODE_READ,&hdf_ref_index_viewer);
+    CHKERRQ(ierr);  
+
+  ierr = VecCreateMPI(PETSC_COMM_WORLD,PETSC_DECIDE,
+                      appctx.m,&appctx.slice_rid);CHKERRQ(ierr);
+    
+  ierr = PetscObjectSetName((PetscObject) appctx.slice_rid,"ref_index");CHKERRQ(ierr); 
+  
+  ierr = VecLoad(appctx.slice_rid,hdf_ref_index_viewer);CHKERRQ(ierr);
+  
+  ierr = PetscViewerDestroy(&hdf_ref_index_viewer);CHKERRQ(ierr);
 
   /*- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
      Create vector data structures for approximate solution
     - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -*/
    ierr = VecCreateMPI(PETSC_COMM_WORLD,PETSC_DECIDE,m,&u); CHKERRQ(ierr);
-
+   ierr = PetscObjectSetName((PetscObject)u, "sol_vec");CHKERRQ(ierr);
+  
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-     Set up display to show graph of the solution
+     Store solution as hdf5
      - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
-
-  ierr = PetscViewerDrawOpen(PETSC_COMM_WORLD,0,"",80,380,400,160,&appctx.viewer1);CHKERRQ(ierr);
-  ierr = PetscViewerDrawGetDraw(appctx.viewer1,0,&draw);CHKERRQ(ierr);
-  ierr = PetscDrawSetDoubleBuffer(draw);CHKERRQ(ierr);
- 
+    
+  ierr = PetscViewerHDF5Open(PETSC_COMM_WORLD,"grating_solution.h5",
+                             FILE_MODE_WRITE,&appctx.hdf5_sol_viewer);CHKERRQ(ierr);
+  
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
      Create timestepping solver context
      - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
@@ -148,9 +172,8 @@ int main(int argc,char **argv)
      Set solution vector and initial timestep
  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
-  dt   = time_total_max/time_steps_max;
-  ierr = TSSetTimeStep(ts,dt);CHKERRQ(ierr);
-
+ ierr = TSSetTimeStep(ts,appctx.step_time);CHKERRQ(ierr);
+    
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
      Customize timestepping solver:
        - Set the solution method to be the Backward Euler method.
@@ -161,8 +184,8 @@ int main(int argc,char **argv)
      to override the defaults set by TSSetMaxSteps()/TSSetMaxTime().
      - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
-  ierr = TSSetMaxSteps(ts,time_steps_max);CHKERRQ(ierr);
-  ierr = TSSetMaxTime(ts,time_total_max);CHKERRQ(ierr);
+  ierr = TSSetMaxSteps(ts,prop_steps);CHKERRQ(ierr);
+  ierr = TSSetMaxTime(ts,prop_distance);CHKERRQ(ierr);
   ierr = TSSetExactFinalTime(ts,TS_EXACTFINALTIME_STEPOVER);CHKERRQ(ierr);
   ierr = TSSetFromOptions(ts);CHKERRQ(ierr);
 
@@ -195,8 +218,9 @@ int main(int argc,char **argv)
   ierr = TSDestroy(&ts);CHKERRQ(ierr);
   ierr = MatDestroy(&A);CHKERRQ(ierr);
   ierr = VecDestroy(&u);CHKERRQ(ierr);
-  ierr = PetscViewerDestroy(&appctx.viewer1);CHKERRQ(ierr);
   ierr = MatDestroy(&appctx.A);CHKERRQ(ierr);
+  ierr = VecDestroy(&appctx.slice_rid);CHKERRQ(ierr);
+  ierr = PetscViewerDestroy(&appctx.hdf5_sol_viewer);CHKERRQ(ierr);
 
   /*
      Always call PetscFinalize() before exiting a program.  This routine
@@ -231,14 +255,8 @@ PetscErrorCode InitialConditions(Vec u,AppCtx *appctx)
   ierr = VecGetOwnershipRange(u,&low,&high); CHKERRQ(ierr);
     
   for (i=low; i<high; i++) {
-      if (i>appctx->m/4 && i< 0.75*(appctx->m)){
           val = 1;
           ierr = VecSetValues(u,1,&i,&val,INSERT_VALUES);
-        }
-      else {
-          val = 0;
-          ierr = VecSetValues(u,1,&i,&val,INSERT_VALUES);
-          }
       }
 
   ierr = VecAssemblyBegin(u);CHKERRQ(ierr);
@@ -279,24 +297,10 @@ PetscErrorCode Monitor(TS ts,PetscInt step,PetscReal time,Vec u,void *ctx)
   AppCtx         *appctx = (AppCtx*) ctx;   /* user-defined application context */
   PetscErrorCode ierr;
   PetscReal      dt,dttol;
-  Vec            u_abs;                  /* absolute value of approximate solution vector */
-  
-  /*- - - - - - - - - - - - - - - - - - - -
-      Copy solution vector to new vector, 
-      conver to absolute value for viewing
-   - - - - - - - - - - - - - - - - - - - -*/
-    
-  ierr = VecDuplicate(u,&u_abs);CHKERRQ(ierr);
-  ierr = VecCopy(u,u_abs);CHKERRQ(ierr);
-  ierr = VecAbs(u_abs);CHKERRQ(ierr);
-    
-  /* - - - - - - - - - - - - - - - - - - - - 
-      View a graph of the current iterate
-   - - - - - - - - - - - - - - - - - - - - */
-  ierr = VecView(u_abs,appctx->viewer1);CHKERRQ(ierr);
-  
-
-  ierr = VecDestroy(&u_abs);CHKERRQ(ierr);
+  PetscInt iteration_number = time/appctx->step_time;     
+  ierr = PetscViewerHDF5SetTimestep(appctx->hdf5_sol_viewer,
+                                    iteration_number);CHKERRQ(ierr);
+  ierr = VecView(u,appctx->hdf5_sol_viewer);CHKERRQ(ierr);     
     
   /*- - - - - - - - - - - - - - - - - - - -
      Print debugging information if desired
@@ -310,7 +314,7 @@ PetscErrorCode Monitor(TS ts,PetscInt step,PetscReal time,Vec u,void *ctx)
 }
 /* --------------------------------------------------------------------- */
 /*
-   RHSMatrixHeat - User-provided routine to compute the right-hand-side
+   RHSMatrixFreeSpace - User-provided routine to compute the right-hand-side
    matrix for the heat equation.
 
    Input Parameters:
@@ -380,6 +384,12 @@ PetscErrorCode RHSMatrixFreeSpace(TS ts,PetscReal t,Vec X,Mat AA,Mat BB,void *ct
   ierr = MatAssemblyEnd(A,MAT_FINAL_ASSEMBLY);CHKERRQ(ierr);
  
     
+    
+    
+  ierr = MatDiagonalSet(A,appctx->slice_rid,ADD_VALUES);CHKERRQ(ierr);
+  ierr = MatAssemblyBegin(A,MAT_FINAL_ASSEMBLY);CHKERRQ(ierr);
+  ierr = MatAssemblyEnd(A,MAT_FINAL_ASSEMBLY);CHKERRQ(ierr);  
+  
   /*
      Set and option to indicate that we will never add a new nonzero location
      to the matrix. If we do, it will generate an error.
