@@ -79,25 +79,25 @@ int main(int argc,char **argv)
   ierr = MPI_Comm_size(PETSC_COMM_WORLD,&size);CHKERRQ(ierr);
   ierr = MPI_Comm_rank(PETSC_COMM_WORLD,&rank);CHKERRQ(ierr);
 
-  appctx.mx        = 15000;
-  appctx.my        = 15000;  
+  appctx.mx        = 5000;
+  appctx.my        = 5000;  
   ierr = PetscOptionsGetInt(NULL,NULL,"-mx",&appctx.mx,NULL);CHKERRQ(ierr);
   ierr = PetscOptionsGetInt(NULL,NULL,"-my",&appctx.my,NULL);CHKERRQ(ierr);  
   M = appctx.mx*appctx.my; 
 
-  appctx.energy    = 1000;  
+  appctx.energy    = 10000;  
   ierr = PetscOptionsGetReal(NULL,NULL,"-energy",&appctx.energy,NULL);
     CHKERRQ(ierr);    
   appctx.lambda    = (1239.84/appctx.energy)*1e-9;
 
-  prop_distance   = 10e-6;
+  prop_distance   = 5e-6;
   ierr = PetscOptionsGetReal(NULL,NULL,"-prop_distance",&prop_distance,NULL);CHKERRQ(ierr);    
   
-  prop_steps      = 2;
+  prop_steps      = 25;
   ierr = PetscOptionsGetInt(NULL,NULL,"-prop_steps",&prop_steps,NULL);CHKERRQ(ierr);      
     
-  appctx.step_grid_x = 10.6e-9;   
-  appctx.step_grid_y = 10.6e-9;     
+  appctx.step_grid_x = 1e-9;   
+  appctx.step_grid_y = 1e-9;     
   ierr = PetscOptionsGetReal(NULL,NULL,"-step_grid_x",
                              &appctx.step_grid_x,NULL);CHKERRQ(ierr);    
   ierr = PetscOptionsGetReal(NULL,NULL,"-step_grid_y",
@@ -135,8 +135,10 @@ int main(int argc,char **argv)
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
      Store solution as hdf5
      - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
-    
-  ierr = PetscViewerHDF5Open(PETSC_COMM_WORLD,"solution.h5",
+  char filename;
+  sprintf(filename, "solution%03d.h5", i);
+  
+  ierr = PetscViewerHDF5Open(PETSC_COMM_WORLD,"filename",
                              FILE_MODE_WRITE,&appctx.hdf5_sol_viewer);CHKERRQ(ierr);
     
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
