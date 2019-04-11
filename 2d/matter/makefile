@@ -2,7 +2,7 @@
 ALL:
 
 CFLAGS	        =
-FFLAGS	        = -L/raid/home/sajid/packages/spack/opt/spack/linux-rhel7-x86_64/gcc-4.8.5/gcc-7.3.0-qrjpi76aeo4bysagruwwfii6oneh56lj/lib64/
+FFLAGS	        = 
 CPPFLAGS        =
 FPPFLAGS        =
 CLEANFILES      = ex_matlab
