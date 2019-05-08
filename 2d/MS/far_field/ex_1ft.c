@@ -108,11 +108,11 @@ int main(int argc,char **args)
 
   ierr = fftshift2D(u_,shift);CHKERRQ(ierr);
 
-  /* Write H to hdf5, for debugging. */
+  /* Write H to hdf5, for debugging.
   PetscViewer hdf5_tf_viewer;
   ierr = PetscViewerHDF5Open(PETSC_COMM_WORLD,"Hvec.h5", FILE_MODE_WRITE,&hdf5_tf_viewer);CHKERRQ(ierr);
   ierr = VecView(H,hdf5_tf_viewer);CHKERRQ(ierr);
-  ierr = PetscViewerDestroy(&hdf5_tf_viewer);CHKERRQ(ierr);
+  ierr = PetscViewerDestroy(&hdf5_tf_viewer);CHKERRQ(ierr); */
 
   /* Write shift, now containing the far field wave to hdf5. */
   ierr = PetscViewerHDF5Open(PETSC_COMM_WORLD,"final.h5",
