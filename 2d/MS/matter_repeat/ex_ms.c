@@ -1,4 +1,4 @@
-static char help[] = "2D Multislice,  MPI-multislice, free-space \n\n";
+static char help[] = "2D Multislice,  MPI-multislice, matter-repeat \n\n";
 
 #include <petscmat.h>
 #include <petscviewerhdf5.h>
@@ -31,8 +31,9 @@ int main(int argc,char **args)
   Mat            A;               /* FFT-matrix to call FFTW via interface */
   PetscInt       prop_steps;      /* number of steps for propagation */
   PetscReal      prop_distance;   /* propagation distance */
-  PetscReal      delta,beta;
-  PetscScalar    rid_fac;
+  PetscReal      delta,beta;      /* delta, beta -> ref index */
+  PetscScalar    rid_fac;         /* multiplicative factor */
+  PetscReal      pi = 3.14159265359;
 
 
   ierr = PetscInitialize(&argc,&args,(char*)0,help);if (ierr) return ierr;
@@ -69,7 +70,7 @@ int main(int argc,char **args)
 
   appctx.step_z = prop_distance/prop_steps;
   
-  rid_fac       = 2*3.14159265359*(appctx.step_z/appctx.lambda)*(PETSC_i*delta-beta);
+  rid_fac       = 2*pi*(appctx.step_z/appctx.lambda)*(PETSC_i*delta-beta);
 
 
   ierr = PetscPrintf(PETSC_COMM_WORLD,"Multi-slice xwp on %d processors!\n",size);
@@ -129,8 +130,9 @@ int main(int argc,char **args)
   ierr = PetscViewerDestroy(&hdf5_tf_viewer);CHKERRQ(ierr);*/
 
   /* Write u, now containing the exit wave to hdf5. */
-  ierr = PetscViewerHDF5Open(PETSC_COMM_WORLD,"sol.h5",
+  ierr = PetscViewerHDF5Open(PETSC_COMM_WORLD,"exit_wave.h5",
 		             FILE_MODE_WRITE,&appctx.hdf5_sol_viewer);CHKERRQ(ierr);
+  ierr = PetscObjectSetName((PetscObject)u, "exit_wave");CHKERRQ(ierr);
   ierr = VecView(u,appctx.hdf5_sol_viewer);CHKERRQ(ierr);
   ierr = PetscViewerDestroy(&appctx.hdf5_sol_viewer);CHKERRQ(ierr);
 
@@ -201,8 +203,7 @@ PetscErrorCode makeinput(Vec u,AppCtx* appctx){
 
 
   ierr = VecGetOwnershipRange(u,&start,&end);CHKERRQ(ierr);
-  ierr = PetscObjectSetName((PetscObject)u, "wave");CHKERRQ(ierr);
- 
+  
   v = 1;
   ierr = VecSet(u,v); CHKERRQ(ierr);
 
