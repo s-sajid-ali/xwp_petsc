@@ -1,4 +1,4 @@
-static char help[] = "2D Multislice,  MPI-multislice, matter_repeat \n\n";
+static char help[] = "2D Multislice,  MPI-multislice, free-space \n\n";
 
 #include <petscmat.h>
 #include <petscviewerhdf5.h>
@@ -31,6 +31,8 @@ int main(int argc,char **args)
   Mat            A;               /* FFT-matrix to call FFTW via interface */
   PetscInt       prop_steps;      /* number of steps for propagation */
   PetscReal      prop_distance;   /* propagation distance */
+  PetscReal      delta,beta;
+  PetscScalar    rid_fac;
 
 
   ierr = PetscInitialize(&argc,&args,(char*)0,help);if (ierr) return ierr;
@@ -40,12 +42,12 @@ int main(int argc,char **args)
 /* ---------------------------------------------------------------------
    Initialize parameters from input!
    --------------------------------------------------------------------- */
-  appctx.mx = 4096;
-  appctx.my = 4096;
+  appctx.mx = 8192;
+  appctx.my = 8192;
   ierr = PetscOptionsGetInt(NULL,NULL,"-mx",&appctx.mx,NULL);CHKERRQ(ierr);
   ierr = PetscOptionsGetInt(NULL,NULL,"-my",&appctx.my,NULL);CHKERRQ(ierr);
  
-  appctx.energy  = 10000;
+  appctx.energy  = 12000;
   ierr = PetscOptionsGetReal(NULL,NULL,"-energy",&appctx.energy,NULL);CHKERRQ(ierr);
   appctx.lambda    = (1239.84/appctx.energy)*1e-9;
  
@@ -55,14 +57,19 @@ int main(int argc,char **args)
   prop_steps      = 25;
   ierr= PetscOptionsGetInt(NULL,NULL,"-prop_steps",&prop_steps,NULL);CHKERRQ(ierr);
 
-  appctx.step_grid_x = 1.22e-9;
-  appctx.step_grid_y = 1.22e-9;
+  appctx.step_grid_x = 1.0987669393246516e-09;
+  appctx.step_grid_y = 1.0987669393246516e-09;
   ierr = PetscOptionsGetReal(NULL,NULL,"-step_grid_x",
                              &appctx.step_grid_x,NULL);CHKERRQ(ierr);
   ierr = PetscOptionsGetReal(NULL,NULL,"-step_grid_y",
                              &appctx.step_grid_y,NULL);CHKERRQ(ierr);
 
-  appctx.step_z   = prop_distance/prop_steps;
+  delta = 1.8402e-05;
+  beta  = 2.8532e-06;
+
+  appctx.step_z = prop_distance/prop_steps;
+  
+  rid_fac       = 2*3.14159265359*(appctx.step_z/appctx.lambda)*(PETSC_i*delta-beta);
 
 
   ierr = PetscPrintf(PETSC_COMM_WORLD,"Multi-slice xwp on %d processors!\n",size);
@@ -105,6 +112,8 @@ int main(int argc,char **args)
   ierr = PetscObjectSetName((PetscObject)slice_rid,"ref_index");CHKERRQ(ierr);
   ierr = VecLoad(slice_rid,hdf_ref_index_viewer);CHKERRQ(ierr);
   ierr = PetscViewerDestroy(&hdf_ref_index_viewer);CHKERRQ(ierr);
+  ierr = VecScale(slice_rid,rid_fac);CHKERRQ(ierr);
+  ierr = VecExp(slice_rid);CHKERRQ(ierr);
 
 /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
     Run the main loop. 
@@ -120,9 +129,8 @@ int main(int argc,char **args)
   ierr = PetscViewerDestroy(&hdf5_tf_viewer);CHKERRQ(ierr);*/
 
   /* Write u, now containing the exit wave to hdf5. */
-  ierr = PetscViewerHDF5Open(PETSC_COMM_WORLD,"exit_wave.h5",
+  ierr = PetscViewerHDF5Open(PETSC_COMM_WORLD,"sol.h5",
 		             FILE_MODE_WRITE,&appctx.hdf5_sol_viewer);CHKERRQ(ierr);
-  ierr = PetscObjectSetName((PetscObject)u, "exit_wave");CHKERRQ(ierr);
   ierr = VecView(u,appctx.hdf5_sol_viewer);CHKERRQ(ierr);
   ierr = PetscViewerDestroy(&appctx.hdf5_sol_viewer);CHKERRQ(ierr);
 
@@ -193,6 +201,7 @@ PetscErrorCode makeinput(Vec u,AppCtx* appctx){
 
 
   ierr = VecGetOwnershipRange(u,&start,&end);CHKERRQ(ierr);
+  ierr = PetscObjectSetName((PetscObject)u, "wave");CHKERRQ(ierr);
  
   v = 1;
   ierr = VecSet(u,v); CHKERRQ(ierr);
@@ -219,14 +228,12 @@ PetscErrorCode ms_loop(Mat A, Vec slice_rid, Vec u, Vec u_, Vec H, PetscInt prop
 
 
   for(i=0; i<prop_steps; i++){
-          ierr = PetscBarrier(NULL);CHKERRQ(ierr);
 	  ierr = PetscPrintf(PETSC_COMM_WORLD,"Slice Num : %d \n",i);CHKERRQ(ierr);    
 	  ierr = MatMult(A,u,u_);CHKERRQ(ierr);
 	  ierr = VecPointwiseMult(u_,u_,H);CHKERRQ(ierr);
 	  ierr = MatMultTranspose(A,u_,u);CHKERRQ(ierr);
 	  ierr = VecScale(u,scale);CHKERRQ(ierr);
 	  ierr = VecPointwiseMult(u,u,slice_rid);CHKERRQ(ierr);
-	  ierr = PetscBarrier((PetscObject)u);CHKERRQ(ierr);
 	  }
 
   return 0;
