@@ -4,7 +4,7 @@ CFLAGS	        =
 FFLAGS	        =  
 CPPFLAGS        =  
 CPPFLAGS        = 
-CLEANFILES      = ex_matlab
+CLEANFILES      = 
 
 include ${PETSC_DIR}/lib/petsc/conf/variables
 include ${PETSC_DIR}/lib/petsc/conf/rules
