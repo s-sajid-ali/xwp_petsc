@@ -84,8 +84,8 @@ int main(int argc,char **argv)
   prop_steps      = 5;
   ierr = PetscOptionsGetInt(NULL,NULL,"-prop_steps",&prop_steps,NULL);CHKERRQ(ierr);      
     
-  appctx.L_x = 1.0987669393246516e-09 * 8192;   
-  appctx.L_y = 1.0987669393246516e-09 * 8192;     
+  appctx.L_x = 1.0987669393246516e-09 * mx;   
+  appctx.L_y = 1.0987669393246516e-09 * my;     
   ierr = PetscOptionsGetReal(NULL,NULL,"-L_x",
                              &appctx.L_x,NULL);CHKERRQ(ierr);    
   ierr = PetscOptionsGetReal(NULL,NULL,"-L_y",
