@@ -67,25 +67,25 @@ int main(int argc,char **argv)
   ierr = MPI_Comm_size(PETSC_COMM_WORLD,&size);CHKERRQ(ierr);
   ierr = MPI_Comm_rank(PETSC_COMM_WORLD,&rank);CHKERRQ(ierr);
 
-  mx        = 8192;
-  my        = 8192;  
+  mx        = 16384;
+  my        = 16384;  
   ierr = PetscOptionsGetInt(NULL,NULL,"-mx",&mx,NULL);CHKERRQ(ierr);
   ierr = PetscOptionsGetInt(NULL,NULL,"-my",&my,NULL);CHKERRQ(ierr);  
   M = mx*my; 
 
-  appctx.energy    = 12000;  
+  appctx.energy    = 25000;  
   ierr = PetscOptionsGetReal(NULL,NULL,"-energy",&appctx.energy,NULL);
     CHKERRQ(ierr);    
   appctx.lambda    = (1239.84/appctx.energy)*1e-9;
 
-  prop_distance   = 5e-6;
+  prop_distance   = 10e-6;
   ierr = PetscOptionsGetReal(NULL,NULL,"-prop_distance",&prop_distance,NULL);CHKERRQ(ierr);    
   
-  prop_steps      = 5;
+  prop_steps      = 200;
   ierr = PetscOptionsGetInt(NULL,NULL,"-prop_steps",&prop_steps,NULL);CHKERRQ(ierr);      
     
-  appctx.L_x = 1.0987669393246516e-09 * mx;   
-  appctx.L_y = 1.0987669393246516e-09 * my;     
+  appctx.L_x = 5.49349935909159e-10 * mx;   
+  appctx.L_y = 5.49349935909159e-10 * my;     
   ierr = PetscOptionsGetReal(NULL,NULL,"-L_x",
                              &appctx.L_x,NULL);CHKERRQ(ierr);    
   ierr = PetscOptionsGetReal(NULL,NULL,"-L_y",
@@ -120,7 +120,7 @@ int main(int argc,char **argv)
      Destroy the viewer
    - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -*/
   PetscViewer hdf_ref_index_viewer;
-  ierr = PetscViewerHDF5Open(PETSC_COMM_WORLD,"ref_index.h5",
+  ierr = PetscViewerHDF5Open(PETSC_COMM_WORLD,"ref_index_dmda.h5",
                              FILE_MODE_READ,&hdf_ref_index_viewer);CHKERRQ(ierr); 
     
   ierr = DMCreateGlobalVector(appctx.da,&appctx.slice_rid); CHKERRQ(ierr);   
