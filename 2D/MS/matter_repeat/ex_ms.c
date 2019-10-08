@@ -107,7 +107,7 @@ int main(int argc,char **args)
    Create a vector to hold refractive index at slice_rid. Destroy the viewer   
   - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -*/
   PetscViewer hdf_ref_index_viewer;
-  ierr = PetscViewerHDF5Open(PETSC_COMM_WORLD,"ref_index.h5",
+  ierr = PetscViewerHDF5Open(PETSC_COMM_WORLD,"ref_index_ms.h5",
 	       FILE_MODE_READ,&hdf_ref_index_viewer);
          CHKERRQ(ierr);
   ierr = PetscObjectSetName((PetscObject)slice_rid,"ref_index");CHKERRQ(ierr);
