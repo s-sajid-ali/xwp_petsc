@@ -92,10 +92,8 @@ int main(int argc,char **args)
  
   /* Create vectors that are compatible with parallel layout of A - must call MatCreateVecs()! */
   ierr = MatCreateVecsFFTW(A,&u,&u_,&H);CHKERRQ(ierr);
-  //ierr = MatCreateVecsFFTW(A,&slice_rid,NULL,NULL);CHKERRQ(ierr);
-  ierr = VecCreateMPI(PETSC_COMM_WORLD,PETSC_DECIDE, appctx.mx*appctx.my,&slice_rid);CHKERRQ(ierr);
-  //ierr = VecDuplicate(H,&slice_rid);
-  
+  ierr = VecDuplicate(H,&slice_rid);
+    
   /* Initialize the Transfer function to be used*/
   ierr = makeTFvec(H,&appctx);CHKERRQ(ierr);
 
