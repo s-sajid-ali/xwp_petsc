@@ -19,6 +19,12 @@ Input parameters include:\n\
        a_t = A*a_xx + A*a_yy + f_r*a - f_i*b
        b_t = A*b_xx + A*b_yy + f_i*a + f_r*b
        
+       This program executes the K1 approach from 
+       https://doi.org/10.1137/S1064827500372262 : 
+       
+       ( 0    -\del   ( real_wave   = ( a_t
+         \del  0   )    imag_wave )     b_t )
+       
   ------------------------------------------------------------------------- */
 
 #include <petscdmda.h>
@@ -116,11 +122,11 @@ int main(int argc,char **argv)
      Create DMDA object. 
     - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -*/
     
-  ierr = DMDACreate2d(PETSC_COMM_WORLD,DM_BOUNDARY_NONE,DM_BOUNDARY_NONE,
+  ierr = DMDACreate2d(PETSC_COMM_WORLD,DM_BOUNDARY_PERIODIC, DM_BOUNDARY_PERIODIC,
                       DMDA_STENCIL_STAR,mx,my,
                       PETSC_DECIDE,PETSC_DECIDE,2,1,NULL,NULL,
                       &appctx.da);CHKERRQ(ierr);
-  ierr = DMSetFromOptions(appctx.da); CHKERRQ(ierr);  
+  ierr = DMSetFromOptions(appctx.da); CHKERRQ(ierr);
   ierr = DMSetUp(appctx.da); CHKERRQ(ierr);
     
   ierr = DMDASetFieldName(appctx.da,0,"a");CHKERRQ(ierr);
@@ -269,54 +275,18 @@ PetscErrorCode formMatrix(DM da, Mat A, void* ctx)
                 row.i = i;   
                 col[0].j = j;        // diagonal entry
                 col[0].i = i;
-                
                 ncols = 1;
-                if (i==0 || i==info.mx-1 || j==0 || j==info.my-1) {
-                    v[0] = 1.0;      // on boundary: trivial equation
-                    }
-                else {
-                    v[0] = -prefac*2/(hx*hx)-prefac*2/(hy*hy); // interior: build a row
-                    if (i-1 > 0) {
-                    col[ncols].j = j;    col[ncols].i = i-1;
-                        v[ncols++] = prefac*1/(hx*hx);}
-                    if (i+1 < info.mx-1) {
-                        col[ncols].j = j;    col[ncols].i = i+1;
-                        v[ncols++] = prefac*1/(hx*hx);}
-                    if (j-1 > 0) {
-                        col[ncols].j = j-1;  col[ncols].i = i;
-                        v[ncols++] = prefac*1/(hy*hy);}
-                    if (j+1 < info.my-1) {
-                        col[ncols].j = j+1;  col[ncols].i = i;
-                        v[ncols++] = prefac*1/(hy*hy);}
-                    }
-                ierr = MatSetValuesStencil(A,1,&row,ncols,col,v,INSERT_VALUES); CHKERRQ(ierr);
-                  
-                /*
-                ncols = 2;
-                row.j = j;           // row of A corresponding to (x_i,y_j)
-                row.i = i;
-                col[0].j = j;        // diagonal entry
-                col[0].i = i;
-                col[1].j = j;        // diagonal entry
-                col[1].i = i;
-                
-                if (dof==0){
-                    row.c = 0;
-                    col[0].c = 0;
-                    col[1].c = 1;
-                    v[0] = ref_idx[j][i].a;
-                    v[1] = -1*ref_idx[j][i].b;
-                        }
-                else{
-                    row.c = 1;
-                    col[0].c = 0;
-                    col[1].c = 1;
-                    v[0] = ref_idx[j][i].b;
-                    v[1] = ref_idx[j][i].a;
-                        }
-                ierr = MatSetValuesStencil(A,1,&row,ncols,col,v,INSERT_VALUES); CHKERRQ(ierr);
-                */
 
+                v[0] = -prefac*2/(hx*hx)-prefac*2/(hy*hy); // interior: build a row/column
+                col[ncols].j = j;    col[ncols].i = i-1;
+                v[ncols++] = prefac*1/(hx*hx);
+                col[ncols].j = j;    col[ncols].i = i+1;
+                v[ncols++] = prefac*1/(hx*hx);
+                col[ncols].j = j-1;  col[ncols].i = i;
+                v[ncols++] = prefac*1/(hy*hy);
+                col[ncols].j = j+1;  col[ncols].i = i;
+                v[ncols++] = prefac*1/(hy*hy);
+                ierr = MatSetValuesStencil(A,1,&row,ncols,col,v,INSERT_VALUES); CHKERRQ(ierr);
                 }
                 
             } 
