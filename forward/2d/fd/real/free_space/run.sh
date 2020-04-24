@@ -1,4 +1,4 @@
-mpirun -np 32 ./ex_k1 \
+mpirun -np 32 ./ex_real_k1_freespace \
 	-ts_type cn \
 	-ksp_type fgmres \
 	-pc_type fieldsplit -pc_fieldsplit_type multiplicative \

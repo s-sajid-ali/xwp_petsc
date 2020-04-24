@@ -1,6 +1,8 @@
 
 static char help[] ="X-ray propagation in matter in 2D\n\
-Solves a simple time-independent linear PDE .\n\
+Assuming that the refractive indices are same at each slice\n\
+Solves a simple time-independent linear PDE\n\
+Uses DMDA. Basic approach adapted from Ed Bueler's book\n\
 Input parameters include:\n\
   -mx,my         : number of grid points\n\
   -energy        : energy of x-rays in ev\n\
@@ -11,22 +13,8 @@ Input parameters include:\n\
 /* ------------------------------------------------------------------------
    This program solves the two-dimensional helmholtz equation:
    
-       u_t = A*u_xx + A*u_yy;     
+       u_t = A*u_xx + A*u_yy + F_t*u;     
   ------------------------------------------------------------------------- */
-
-/*
-   Include "petscts.h" so that we can use TS solvers.  Note that this file
-   automatically includes:
-     petscsys.h     - base PETSc routines  
-     petscvec.h     - vectors
-     petscmat.h     - matrices
-     petscis.h      - index sets            
-     petscksp.h     - Krylov subspace methods
-     petscpc.h      - preconditioners
-     petscviewer.h  - viewers               
-     petscksp.h     - linear solvers
-     petscsnes.h    - nonlinear solvers
-*/
 
 #include <petscts.h>
 #include <petscdmda.h>
@@ -43,8 +31,9 @@ typedef struct {
   PetscReal   energy;            /* energy in ev */  
   PetscReal   step_time;         /* step size in time */
   PetscViewer hdf5_sol_viewer;   /* viewer to write the solution to hdf5*/
+  Vec         slice_rid;         /* vector to hold the refractive index */
   DM          da;                /* Use DMDA to manage grid and vecs*/
-  
+    
 } AppCtx;
 
 /*
@@ -62,10 +51,10 @@ int main(int argc,char **argv)
   Vec            u;                      /* approximate solution vector */
   PetscReal      prop_distance;          /* propagation distance */
   PetscInt       prop_steps;             /* number of steps for propagation */
-  PetscInt       steps;                  /* output for TSGetStepNumber */
+  PetscInt       steps;                  /* output for TSGetStepNumber */  
   PetscInt       mx,my;                  /* grid size in x and y */  
-  PetscInt       M;                      /* total grid size : mx * my */
   PetscMPIInt    size,rank;              /* MPI size and rank*/
+  PetscBool      ts_jac_reuse = true;    /* for TSRHSJacobianSetReuse*/
   PetscErrorCode ierr;
 
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -76,25 +65,24 @@ int main(int argc,char **argv)
   ierr = MPI_Comm_size(PETSC_COMM_WORLD,&size);CHKERRQ(ierr);
   ierr = MPI_Comm_rank(PETSC_COMM_WORLD,&rank);CHKERRQ(ierr);
 
-  mx        = 1024;
-  my        = 1024;  
+  mx        = 16384;
+  my        = 16384;  
   ierr = PetscOptionsGetInt(NULL,NULL,"-mx",&mx,NULL);CHKERRQ(ierr);
   ierr = PetscOptionsGetInt(NULL,NULL,"-my",&my,NULL);CHKERRQ(ierr);  
-  M = mx*my; 
 
   appctx.energy    = 25000;  
   ierr = PetscOptionsGetReal(NULL,NULL,"-energy",&appctx.energy,NULL);
     CHKERRQ(ierr);    
-  appctx.lambda      = (1239.84/appctx.energy)*1e-9;
+  appctx.lambda    = (1239.84/appctx.energy)*1e-9;
 
-  prop_distance   = 1e-5;
+  prop_distance   = 10e-6;
   ierr = PetscOptionsGetReal(NULL,NULL,"-prop_distance",&prop_distance,NULL);CHKERRQ(ierr);    
   
-  prop_steps      = 25;
+  prop_steps      = 200;
   ierr = PetscOptionsGetInt(NULL,NULL,"-prop_steps",&prop_steps,NULL);CHKERRQ(ierr);      
     
-  appctx.L_x = 2e-9*mx;   
-  appctx.L_y = 2e-9*my;     
+  appctx.L_x = 5.49349935909159e-10 * mx;   
+  appctx.L_y = 5.49349935909159e-10 * my;     
   ierr = PetscOptionsGetReal(NULL,NULL,"-L_x",
                              &appctx.L_x,NULL);CHKERRQ(ierr);    
   ierr = PetscOptionsGetReal(NULL,NULL,"-L_y",
@@ -106,55 +94,74 @@ int main(int argc,char **argv)
       ierr = PetscPrintf(PETSC_COMM_SELF,
                          "Solving a linear TS problem on %d processors\n",size);
       CHKERRQ(ierr);
-      ierr = PetscPrintf(PETSC_COMM_SELF,"mx : %d, my: %d, lambda : %e\n",
-                         mx, my, appctx.lambda);CHKERRQ(ierr);
+      ierr = PetscPrintf(PETSC_COMM_SELF,"mx : %d, my: %d, energy(in eV) : %e\n",
+                         mx, my, appctx.energy);CHKERRQ(ierr);
       }
-    
-    
-  /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-     Create 2D DMDA to manage grid and vecs.
-     - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
-  
-  ierr = DMDACreate2d(PETSC_COMM_WORLD,DM_BOUNDARY_NONE, DM_BOUNDARY_NONE,
-                       DMDA_STENCIL_STAR,mx,my,
-                       PETSC_DECIDE,PETSC_DECIDE,1,1,NULL,NULL,&appctx.da); CHKERRQ(ierr);
 
-  ierr = DMSetFromOptions(appctx.da); CHKERRQ(ierr);
+    
+ 
+  /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+     Create DMDA object. 
+    - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -*/
+    
+  ierr = DMDACreate2d(PETSC_COMM_WORLD,DM_BOUNDARY_NONE,DM_BOUNDARY_NONE,
+                      DMDA_STENCIL_STAR,mx,my,
+                      PETSC_DECIDE,PETSC_DECIDE,1,1,NULL,NULL,
+                      &appctx.da);CHKERRQ(ierr);
+    
+  ierr = DMSetFromOptions(appctx.da); CHKERRQ(ierr);  
   ierr = DMSetUp(appctx.da); CHKERRQ(ierr);
+  
+ /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+     Create a vector to hold refractive index at appctx->slice_rid
+     Destroy the viewer
+   - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -*/
+  PetscViewer hdf_ref_index_viewer;
+  ierr = PetscViewerHDF5Open(PETSC_COMM_WORLD,"ref_index_dmda.h5",
+                             FILE_MODE_READ,&hdf_ref_index_viewer);CHKERRQ(ierr); 
+    
+  ierr = DMCreateGlobalVector(appctx.da,&appctx.slice_rid); CHKERRQ(ierr);   
+  ierr = PetscObjectSetName((PetscObject) appctx.slice_rid,"ref_index");CHKERRQ(ierr);  
+  ierr = VecLoad(appctx.slice_rid,hdf_ref_index_viewer);CHKERRQ(ierr);
+  
+  ierr = PetscViewerDestroy(&hdf_ref_index_viewer);CHKERRQ(ierr);  
     
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
      Store solution as hdf5
      - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
-    
+  
   ierr = PetscViewerHDF5Open(PETSC_COMM_WORLD,"solution.h5",
-                             FILE_MODE_WRITE,&appctx.hdf5_sol_viewer);CHKERRQ(ierr);
+                             FILE_MODE_WRITE,&appctx.hdf5_sol_viewer);CHKERRQ(ierr);  
+    
     
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
      Create vector data structures for solution
     - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -*/
-    
-  ierr = DMCreateGlobalVector(appctx.da,&u); CHKERRQ(ierr);
+  ierr = DMCreateGlobalVector(appctx.da,&u); CHKERRQ(ierr); 
   ierr = PetscObjectSetName((PetscObject)u, "sol_vec");CHKERRQ(ierr);
- 
+  
+
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+     Create matrix data structure; set matrix evaluation routine.
+     - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+ 
+  ierr = DMCreateMatrix(appctx.da,&A); CHKERRQ(ierr);
+  ierr = formMatrix(appctx.da,A,&appctx);  
+    
+   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
      Create timestepping solver context
      - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
   ierr = TSCreate(PETSC_COMM_WORLD,&ts);CHKERRQ(ierr);
   ierr = TSSetProblemType(ts,TS_LINEAR);CHKERRQ(ierr);
 
-  /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
      Set optional user-defined monitoring routine
      - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
-  ierr = TSMonitorSet(ts,Monitor,&appctx,NULL);CHKERRQ(ierr);
+  //ierr = TSMonitorSet(ts,Monitor,&appctx,NULL);CHKERRQ(ierr);
 
-  /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-     Create matrix data structure; set matrix evaluation routine.
-     - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
-  ierr = DMCreateMatrix(appctx.da,&A); CHKERRQ(ierr);    
-  ierr =  formMatrix(appctx.da,A,&appctx);CHKERRQ(ierr);
-
+    
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
      Set time dependent linear RHS function. 
      - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
@@ -175,8 +182,7 @@ int main(int argc,char **argv)
   ierr = TSSetMaxTime(ts,prop_distance);CHKERRQ(ierr);
   ierr = TSSetExactFinalTime(ts,TS_EXACTFINALTIME_STEPOVER);CHKERRQ(ierr);
   ierr = TSSetFromOptions(ts);CHKERRQ(ierr);
-   
-  PetscBool ts_jac_reuse=true;  
+
   ierr = TSRHSJacobianSetReuse(ts,ts_jac_reuse); CHKERRQ(ierr);  
     
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -195,80 +201,36 @@ int main(int argc,char **argv)
   ierr = TSGetStepNumber(ts,&steps);CHKERRQ(ierr);
 
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-     Free work space.
+     View timestepping solver info
      - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
+  ierr = TSView(ts,PETSC_VIEWER_STDOUT_WORLD);CHKERRQ(ierr);
+
+  /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+     Free work space.  All PETSc objects should be destroyed when they
+     are no longer needed.
+     - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+  ierr = VecView(u,appctx.hdf5_sol_viewer);CHKERRQ(ierr);  
+    
   ierr = TSDestroy(&ts);CHKERRQ(ierr);
   ierr = MatDestroy(&A);CHKERRQ(ierr);
   ierr = VecDestroy(&u);CHKERRQ(ierr);
-  ierr = PetscViewerDestroy(&appctx.hdf5_sol_viewer);CHKERRQ(ierr);   
+  ierr = VecDestroy(&appctx.slice_rid);CHKERRQ(ierr);
+  ierr = PetscViewerDestroy(&appctx.hdf5_sol_viewer);CHKERRQ(ierr);
   
+    
+  /*
+     Always call PetscFinalize() before exiting a program.  This routine
+       - finalizes the PETSc libraries as well as MPI
+       - provides summary and diagnostic information if certain runtime
+         options are chosen (e.g., -log_view).
+  */
   ierr = PetscFinalize();
   return ierr;
 }
-/* --------------------------------------------------------------------- */
-/*
-   InitialConditions - Computes the solution at the initial time.
 
-   Input Parameter:
-   u - uninitialized solution vector (global)
-   appctx - user-defined application context
 
-   Output Parameter:
-   u - vector with solution at initial time (global)
-*/
-PetscErrorCode InitialConditions(Vec u,AppCtx *appctx)
-{
-    PetscErrorCode ierr;
-    PetscInt       i, j;
-    PetscScalar    **ab;
-    DMDALocalInfo  info;
-
-    ierr = DMDAGetLocalInfo(appctx->da,&info); CHKERRQ(ierr);
-    ierr = DMDAVecGetArray(appctx->da, u, &ab);CHKERRQ(ierr);
-    
-    for (j=info.ys; j<info.ys+info.ym; j++) {
-        for (i=info.xs; i<info.xs+info.xm; i++) {
-            if (i > info.mx*3/8 && i < info.mx*5/8){
-                if(j > info.my*3/8 && j < info.my*5/8){
-                ab[j][i] = 1.0;  
-                }
-            }
-            else {
-                ab[j][i] = 0.0;
-            }
-        }
-    }
-    ierr = DMDAVecRestoreArray(appctx->da, u, &ab); CHKERRQ(ierr);
-    
-  return 0;
-}
-
-/* --------------------------------------------------------------------- */
-/*
-   Monitor - save solution computed at each timestep to hdf5 file.
-
-   Input Parameters:
-   ts     - the timestep context
-   step   - the count of the current step 
-   time   - the current time
-   u      - the solution at this timestep
-   ctx    - user-provided context
-            
-*/
-PetscErrorCode Monitor(TS ts,PetscInt step,PetscReal time,Vec u,void *ctx)
-{
-  AppCtx         *appctx = (AppCtx*) ctx;   /* user-defined application context */
-  PetscErrorCode ierr;
-  PetscInt       iteration_number;
-  iteration_number = time/appctx->step_time;    
-    
-  ierr = PetscViewerHDF5SetTimestep(appctx->hdf5_sol_viewer,
-                                    iteration_number);CHKERRQ(ierr);
-  ierr = VecView(u,appctx->hdf5_sol_viewer);CHKERRQ(ierr);
-    
-  return 0;
-}
 /* --------------------------------------------------------------------- */
 /*
    formMatrix - Computes the matrix at the initial time, saves the
@@ -280,8 +242,10 @@ PetscErrorCode Monitor(TS ts,PetscInt step,PetscReal time,Vec u,void *ctx)
    appctx - user-defined application context
 */
 
+
 PetscErrorCode formMatrix(DM da, Mat A, void* ctx)
-{
+{ 
+    
     AppCtx         *appctx = (AppCtx*)ctx;  /* user-defined application context */
     PetscErrorCode ierr;                    /* Error code */  
     DMDALocalInfo  info;                    /* For storing DMDA info */   
@@ -324,5 +288,60 @@ PetscErrorCode formMatrix(DM da, Mat A, void* ctx)
     }
     ierr = MatAssemblyBegin(A,MAT_FINAL_ASSEMBLY); CHKERRQ(ierr);
     ierr = MatAssemblyEnd(A,MAT_FINAL_ASSEMBLY); CHKERRQ(ierr);
+    
+    ierr = MatDiagonalSet(A,appctx->slice_rid,ADD_VALUES);CHKERRQ(ierr);
+    
+    ierr = MatAssemblyBegin(A,MAT_FINAL_ASSEMBLY); CHKERRQ(ierr);
+    ierr = MatAssemblyEnd(A,MAT_FINAL_ASSEMBLY); CHKERRQ(ierr);
+    
     return 0;
+}
+
+
+/* --------------------------------------------------------------------- */
+/*
+   InitialConditions - Computes the solution at the initial time.
+
+   Input Parameter:
+   u - uninitialized solution vector (global)
+   appctx - user-defined application context
+
+   Output Parameter:
+   u - vector with solution at initial time (global)
+*/
+PetscErrorCode InitialConditions(Vec u,AppCtx *appctx)
+{
+  PetscErrorCode ierr;
+
+  VecSet(u,1.0);
+  ierr = VecAssemblyBegin(u);CHKERRQ(ierr);
+  ierr = VecAssemblyEnd(u);CHKERRQ(ierr);  
+
+  return 0;
+}
+
+/* --------------------------------------------------------------------- */
+/*
+   Monitor - save solution computed at each timestep to hdf5 file.
+
+   Input Parameters:
+   ts     - the timestep context
+   step   - the count of the current step 
+   time   - the current time
+   u      - the solution at this timestep
+   ctx    - user-provided context
+            
+*/
+PetscErrorCode Monitor(TS ts,PetscInt step,PetscReal time,Vec u,void *ctx)
+{
+  AppCtx         *appctx = (AppCtx*) ctx;   /* user-defined application context */
+  PetscErrorCode ierr;
+  PetscInt       iteration_number;
+  iteration_number = time/appctx->step_time;     
+
+  ierr = PetscViewerHDF5SetTimestep(appctx->hdf5_sol_viewer,
+                                    iteration_number);CHKERRQ(ierr);
+  ierr = VecView(u,appctx->hdf5_sol_viewer);CHKERRQ(ierr);
+    
+  return 0;
 }

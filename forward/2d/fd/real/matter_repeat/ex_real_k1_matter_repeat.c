@@ -88,15 +88,15 @@ int main(int argc,char **argv)
   ierr = PetscOptionsGetInt(NULL,NULL,"-mx",&mx,NULL);CHKERRQ(ierr);
   ierr = PetscOptionsGetInt(NULL,NULL,"-my",&my,NULL);CHKERRQ(ierr);  
 
-  appctx.energy    = 25000;  
+  appctx.energy    = 15000;  
   ierr = PetscOptionsGetReal(NULL,NULL,"-energy",&appctx.energy,NULL);
     CHKERRQ(ierr);    
   appctx.lambda    = (1239.84/appctx.energy)*1e-9;
 
-  prop_distance   = 1e-5;
+  prop_distance   = 30.808e-6;
   ierr = PetscOptionsGetReal(NULL,NULL,"-prop_distance",&prop_distance,NULL);CHKERRQ(ierr);    
   
-  prop_steps      = 25;
+  prop_steps      = 10;
   ierr = PetscOptionsGetInt(NULL,NULL,"-prop_steps",&prop_steps,NULL);CHKERRQ(ierr);      
     
   appctx.L_x = 2e-9 * mx;   
@@ -141,13 +141,13 @@ int main(int argc,char **argv)
   ierr = DMCreateGlobalVector(appctx.da,&appctx.slice_rid); CHKERRQ(ierr);  
   ierr = PetscObjectSetName((PetscObject) appctx.slice_rid,"ref_index");CHKERRQ(ierr); 
   
-  /*  
+  
   PetscViewer hdf_slice_rid_viewer;
-  ierr = PetscViewerHDF5Open(PETSC_COMM_WORLD,"ref_index_dmda.h5",
+  ierr = PetscViewerHDF5Open(PETSC_COMM_WORLD,"ref_index_dmda_k1.h5",
                              FILE_MODE_READ,&hdf_slice_rid_viewer);CHKERRQ(ierr); 
   ierr = VecLoad(appctx.slice_rid,hdf_slice_rid_viewer);CHKERRQ(ierr);
   ierr = PetscViewerDestroy(&hdf_slice_rid_viewer);CHKERRQ(ierr);  
-  */   
+  
      
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
      Create vector data structures for solution
@@ -276,7 +276,26 @@ PetscErrorCode formMatrix(DM da, Mat A, void* ctx)
                 col[0].j = j;        // diagonal entry
                 col[0].i = i;
                 ncols = 1;
-
+                /*
+                if (i==0 || i==info.mx-1 || j==0 || j==info.my-1) {
+                    v[0] = 1.0;      // on boundary: trivial equation
+                    }
+                else {
+                    v[0] = -prefac*2/(hx*hx)-prefac*2/(hy*hy); // interior: build a row
+                    if (i-1 > 0) {
+                    col[ncols].j = j;    col[ncols].i = i-1;
+                        v[ncols++] = prefac*1/(hx*hx);}
+                    if (i+1 < info.mx-1) {
+                        col[ncols].j = j;    col[ncols].i = i+1;
+                        v[ncols++] = prefac*1/(hx*hx);}
+                    if (j-1 > 0) {
+                        col[ncols].j = j-1;  col[ncols].i = i;
+                        v[ncols++] = prefac*1/(hy*hy);}
+                    if (j+1 < info.my-1) {
+                        col[ncols].j = j+1;  col[ncols].i = i;
+                        v[ncols++] = prefac*1/(hy*hy);}
+                    }
+                 */
                 v[0] = -prefac*2/(hx*hx)-prefac*2/(hy*hy); // interior: build a row/column
                 col[ncols].j = j;    col[ncols].i = i-1;
                 v[ncols++] = prefac*1/(hx*hx);
@@ -287,6 +306,25 @@ PetscErrorCode formMatrix(DM da, Mat A, void* ctx)
                 col[ncols].j = j+1;  col[ncols].i = i;
                 v[ncols++] = prefac*1/(hy*hy);
                 ierr = MatSetValuesStencil(A,1,&row,ncols,col,v,INSERT_VALUES); CHKERRQ(ierr);
+                  
+                ncols = 1;
+                row.j = j;           // row of A corresponding to (x_i,y_j)
+                row.i = i;
+                col[0].j = j;        // diagonal entry
+                col[0].i = i;
+                
+                row.c = 0;
+                col[0].c = 0;
+                v[0] = ref_idx[j][i].a;
+                ierr = MatSetValuesStencil(A,1,&row,ncols,col,v,INSERT_VALUES); CHKERRQ(ierr);
+                
+                row.c = dof;
+                col[0].c = 1-dof;
+                if (dof==0){v[0] = -1*ref_idx[j][i].b;}
+                else{v[0] = ref_idx[j][i].b;}
+                ierr = MatSetValuesStencil(A,1,&row,ncols,col,v,ADD_VALUES); CHKERRQ(ierr); 
+                
+
                 }
                 
             } 
@@ -327,12 +365,12 @@ PetscErrorCode InitialConditions(DM da, Vec u,AppCtx *appctx)
     
   for (j = info.ys; j < info.ys+info.ym; j++) {
       for (i = info.xs; i < info.xs+info.xm; i++) {
-          if (i>info.mx*3/8 && i< info.mx*5/8){
-              if (j>info.mx*3/8 && j< info.mx*5/8){
+          //if (i>info.mx*3/8 && i< info.mx*5/8){
+          //    if (j>info.mx*3/8 && j< info.mx*5/8){
                   vals[j][i].a = 1;
                   vals[j][i].b = 0;
-                  }
-              }
+          //        }
+          //    }
           }
       }
 

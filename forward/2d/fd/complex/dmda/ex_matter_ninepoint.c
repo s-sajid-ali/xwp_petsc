@@ -1,6 +1,5 @@
 
 static char help[] ="X-ray propagation in matter in 2D\n\
-Assuming that the refractive indices are same at each slice\n\
 Solves a simple time-independent linear PDE\n\
 Uses DMDA. Basic approach adapted from Ed Bueler's book\n\
 Input parameters include:\n\
@@ -30,8 +29,10 @@ typedef struct {
   PetscReal   lambda;            /* wavelength */
   PetscReal   energy;            /* energy in ev */  
   PetscReal   step_time;         /* step size in time */
+  PetscInt    prop_steps;        /* number of steps for propagation */
   PetscViewer hdf5_sol_viewer;   /* viewer to write the solution to hdf5*/
   Vec         slice_rid;         /* vector to hold the refractive index */
+  Vec         base_diag;         /* vector to hold the diag at t=0 */  
   DM          da;                /* Use DMDA to manage grid and vecs*/
     
 } AppCtx;
@@ -41,20 +42,18 @@ typedef struct {
 */
 extern PetscErrorCode InitialConditions(Vec,AppCtx*);
 extern PetscErrorCode formMatrix(DM, Mat, void*);
+extern PetscErrorCode RHSMatrixMatter(TS,PetscReal,Vec,Mat,Mat,void*);
 extern PetscErrorCode Monitor(TS,PetscInt,PetscReal,Vec,void*);
 
 int main(int argc,char **argv)
 {
   AppCtx         appctx;                 /* user-defined application context */
   TS             ts;                     /* timestepping context */
-  KSP            ksp;                    /* Krylov solver context */  
   Mat            A;                      /* matrix data structure */
   Vec            u;                      /* approximate solution vector */
   PetscReal      prop_distance;          /* propagation distance */
-  PetscInt       prop_steps;             /* number of steps for propagation */
   PetscInt       steps;                  /* output for TSGetStepNumber */  
   PetscInt       mx,my;                  /* grid size in x and y */  
-  PetscInt       M;                      /* total grid size : mx * my */
   PetscMPIInt    size,rank;              /* MPI size and rank*/
   PetscBool      ts_jac_reuse = true;    /* for TSRHSJacobianSetReuse*/
   PetscErrorCode ierr;
@@ -67,31 +66,31 @@ int main(int argc,char **argv)
   ierr = MPI_Comm_size(PETSC_COMM_WORLD,&size);CHKERRQ(ierr);
   ierr = MPI_Comm_rank(PETSC_COMM_WORLD,&rank);CHKERRQ(ierr);
 
-  mx        = 16384;
-  my        = 16384;  
+  mx        = 4096;
+  my        = 4096;  
   ierr = PetscOptionsGetInt(NULL,NULL,"-mx",&mx,NULL);CHKERRQ(ierr);
   ierr = PetscOptionsGetInt(NULL,NULL,"-my",&my,NULL);CHKERRQ(ierr);  
-  M = mx*my; 
 
   appctx.energy    = 25000;  
   ierr = PetscOptionsGetReal(NULL,NULL,"-energy",&appctx.energy,NULL);
     CHKERRQ(ierr);    
   appctx.lambda    = (1239.84/appctx.energy)*1e-9;
 
-  prop_distance   = 10e-6;
+  prop_distance   = 20e-6;
   ierr = PetscOptionsGetReal(NULL,NULL,"-prop_distance",&prop_distance,NULL);CHKERRQ(ierr);    
   
-  prop_steps      = 200;
-  ierr = PetscOptionsGetInt(NULL,NULL,"-prop_steps",&prop_steps,NULL);CHKERRQ(ierr);      
+  appctx.prop_steps      = 10;
+  ierr = PetscOptionsGetInt(NULL,NULL,"-prop_steps",&appctx.prop_steps,NULL);CHKERRQ(ierr);      
     
-  appctx.L_x = 5.49349935909159e-10 * mx;   
-  appctx.L_y = 5.49349935909159e-10 * my;     
+  appctx.L_x = 5e-10 * mx;   
+  appctx.L_y = 5e-10 * my;     
   ierr = PetscOptionsGetReal(NULL,NULL,"-L_x",
                              &appctx.L_x,NULL);CHKERRQ(ierr);    
   ierr = PetscOptionsGetReal(NULL,NULL,"-L_y",
                              &appctx.L_y,NULL);CHKERRQ(ierr);        
+
     
-  appctx.step_time   = prop_distance/prop_steps;
+  appctx.step_time   = prop_distance/appctx.prop_steps;
 
   if(rank==0){
       ierr = PetscPrintf(PETSC_COMM_SELF,
@@ -108,7 +107,7 @@ int main(int argc,char **argv)
     - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -*/
     
   ierr = DMDACreate2d(PETSC_COMM_WORLD,DM_BOUNDARY_NONE,DM_BOUNDARY_NONE,
-                      DMDA_STENCIL_STAR,mx,my,
+                      DMDA_STENCIL_BOX,mx,my,
                       PETSC_DECIDE,PETSC_DECIDE,1,1,NULL,NULL,
                       &appctx.da);CHKERRQ(ierr);
     
@@ -117,17 +116,12 @@ int main(int argc,char **argv)
   
  /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
      Create a vector to hold refractive index at appctx->slice_rid
-     Destroy the viewer
+     Create a vector to hold base diag  at appctx->base_diag
    - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -*/
-  PetscViewer hdf_ref_index_viewer;
-  ierr = PetscViewerHDF5Open(PETSC_COMM_WORLD,"ref_index_dmda.h5",
-                             FILE_MODE_READ,&hdf_ref_index_viewer);CHKERRQ(ierr); 
-    
   ierr = DMCreateGlobalVector(appctx.da,&appctx.slice_rid); CHKERRQ(ierr);   
   ierr = PetscObjectSetName((PetscObject) appctx.slice_rid,"ref_index");CHKERRQ(ierr);  
-  ierr = VecLoad(appctx.slice_rid,hdf_ref_index_viewer);CHKERRQ(ierr);
   
-  ierr = PetscViewerDestroy(&hdf_ref_index_viewer);CHKERRQ(ierr);  
+  ierr = DMCreateGlobalVector(appctx.da,&appctx.base_diag); CHKERRQ(ierr);     
     
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
      Store solution as hdf5
@@ -169,7 +163,7 @@ int main(int argc,char **argv)
      Set time dependent linear RHS function. 
      - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
   ierr = TSSetRHSFunction(ts,NULL,TSComputeRHSFunctionLinear,&appctx);CHKERRQ(ierr);
-  ierr = TSSetRHSJacobian(ts,A,A,TSComputeRHSJacobianConstant,&appctx);CHKERRQ(ierr);
+  ierr = TSSetRHSJacobian(ts,A,A,RHSMatrixMatter,&appctx);CHKERRQ(ierr);
   
  /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
      Set solution vector and initial timestep
@@ -181,7 +175,7 @@ int main(int argc,char **argv)
      Customize timestepping solver
      - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
-  ierr = TSSetMaxSteps(ts,prop_steps);CHKERRQ(ierr);
+  ierr = TSSetMaxSteps(ts,appctx.prop_steps);CHKERRQ(ierr);
   ierr = TSSetMaxTime(ts,prop_distance);CHKERRQ(ierr);
   ierr = TSSetExactFinalTime(ts,TS_EXACTFINALTIME_STEPOVER);CHKERRQ(ierr);
   ierr = TSSetFromOptions(ts);CHKERRQ(ierr);
@@ -217,12 +211,11 @@ int main(int argc,char **argv)
   ierr = VecView(u,appctx.hdf5_sol_viewer);CHKERRQ(ierr);  
     
   ierr = TSDestroy(&ts);CHKERRQ(ierr);
-  ierr = MatDestroy(&A);CHKERRQ(ierr);
+  ierr = MatDestroy(&A);CHKERRQ(ierr);  
   ierr = VecDestroy(&u);CHKERRQ(ierr);
   ierr = VecDestroy(&appctx.slice_rid);CHKERRQ(ierr);
   ierr = PetscViewerDestroy(&appctx.hdf5_sol_viewer);CHKERRQ(ierr);
-  
-    
+     
   /*
      Always call PetscFinalize() before exiting a program.  This routine
        - finalizes the PETSc libraries as well as MPI
@@ -252,8 +245,8 @@ PetscErrorCode formMatrix(DM da, Mat A, void* ctx)
     AppCtx         *appctx = (AppCtx*)ctx;  /* user-defined application context */
     PetscErrorCode ierr;                    /* Error code */  
     DMDALocalInfo  info;                    /* For storing DMDA info */   
-    MatStencil     row, col[5];             /* Stencil to set data */  
-    PetscScalar    v[5];                    /* Space for storing values to be inserted to matrix*/
+    MatStencil     row, col[9];             /* Stencil to set data */  
+    PetscScalar    v[9];                    /* Space for storing values to be inserted to matrix*/
     PetscInt       i, j, ncols;             /* Iteration over local rows,cols and stencil cols */ 
     
     ierr = DMDAGetLocalInfo(da,&info); CHKERRQ(ierr);
@@ -272,19 +265,33 @@ PetscErrorCode formMatrix(DM da, Mat A, void* ctx)
             if (i==0 || i==info.mx-1 || j==0 || j==info.my-1) {
                 v[0] = 1.0;      // on boundary: trivial equation
             } else {
-                v[0] = -prefac*2/(hx*hx)-prefac*2/(hy*hy); // interior: build a row
+                //assume hx==hy
+                v[0] = -prefac*20/(6*hx*hy); // interior: build a row
                 if (i-1 > 0) {
                     col[ncols].j = j;    col[ncols].i = i-1;
-                    v[ncols++] = prefac*1/(hx*hx);}
+                    v[ncols++] = prefac*4/(6*hx*hx);}
                 if (i+1 < info.mx-1) {
                     col[ncols].j = j;    col[ncols].i = i+1;
-                    v[ncols++] = prefac*1/(hx*hx);}
+                    v[ncols++] = prefac*4/(6*hx*hx);}
                 if (j-1 > 0) {
                     col[ncols].j = j-1;  col[ncols].i = i;
-                    v[ncols++] = prefac*1/(hy*hy);}
+                    v[ncols++] = prefac*4/(6*hy*hy);}
                 if (j+1 < info.my-1) {
                     col[ncols].j = j+1;  col[ncols].i = i;
-                    v[ncols++] = prefac*1/(hy*hy);}
+                    v[ncols++] = prefac*4/(6*hy*hy);}
+                if (i-1 > 0 && j-1 > 0 ) {
+                    col[ncols].j = j-1;    col[ncols].i = i-1;
+                    v[ncols++] = prefac*1/(6*hx*hy);}
+                if (i+1 < info.mx-1 > 0 && j+1 < info.my-1 ) {
+                    col[ncols].j = j+1;    col[ncols].i = i+1;
+                    v[ncols++] = prefac*1/(6*hx*hy);}
+                if (i-1 > 0 && j+1 < info.my-1 ) {
+                    col[ncols].j = j+1;    col[ncols].i = i-1;
+                    v[ncols++] = prefac*1/(6*hx*hy);}
+                if (info.mx-1 > 0 && j-1 > 0 ) {
+                    col[ncols].j = j-1;    col[ncols].i = i+1;
+                    v[ncols++] = prefac*1/(6*hx*hy);}
+                
             }
             ierr = MatSetValuesStencil(A,1,&row,ncols,col,v,INSERT_VALUES); CHKERRQ(ierr);
         }
@@ -292,10 +299,14 @@ PetscErrorCode formMatrix(DM da, Mat A, void* ctx)
     ierr = MatAssemblyBegin(A,MAT_FINAL_ASSEMBLY); CHKERRQ(ierr);
     ierr = MatAssemblyEnd(A,MAT_FINAL_ASSEMBLY); CHKERRQ(ierr);
     
-    ierr = MatDiagonalSet(A,appctx->slice_rid,ADD_VALUES);CHKERRQ(ierr);
     
-    ierr = MatAssemblyBegin(A,MAT_FINAL_ASSEMBLY); CHKERRQ(ierr);
-    ierr = MatAssemblyEnd(A,MAT_FINAL_ASSEMBLY); CHKERRQ(ierr);
+    /*Set and option to indicate that we will never add a new nonzero location
+        to the matrix. If we do, it will generate an error.*/
+    ierr = MatSetOption(A,MAT_NEW_NONZERO_LOCATION_ERR,PETSC_TRUE);CHKERRQ(ierr);   
+   
+
+    
+    ierr = MatGetDiagonal(A,appctx->base_diag); CHKERRQ(ierr);
     
     return 0;
 }
@@ -345,6 +356,59 @@ PetscErrorCode Monitor(TS ts,PetscInt step,PetscReal time,Vec u,void *ctx)
   ierr = PetscViewerHDF5SetTimestep(appctx->hdf5_sol_viewer,
                                     iteration_number);CHKERRQ(ierr);
   ierr = VecView(u,appctx->hdf5_sol_viewer);CHKERRQ(ierr);
+    
+  return 0;
+}
+
+/* --------------------------------------------------------------------- */
+/*
+   RHSMatrixMatter - User-provided routine to compute the time dependent
+   right-hand-side matrix for FD wave propagation. 
+   ->set matrix structure
+   ->get refractive index for current slice
+   ->add refractive index to matrix diagonal
+
+   Input Parameters:
+   ts  - the TS context
+   t   - current time
+   ctx - user-defined context, as set by TSetRHSJacobian()
+*/
+PetscErrorCode RHSMatrixMatter(TS ts,PetscReal t,Vec X,Mat AA,Mat BB,void *ctx)
+{
+  Mat            A       = AA;            /* Jacobian matrix */
+  AppCtx         *appctx = (AppCtx*)ctx;  /* user-defined application context */
+  PetscErrorCode ierr;                    /* error code */  
+  PetscInt       iteration_number;        /* get current iteration number */
+  char           fname[sizeof "ref_index_dmda.h5"];
+  
+  iteration_number = t/appctx->step_time;
+  
+
+  /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+     Insert the diagonal from initial time,
+     Add to it the current time dependant F
+   - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+  ierr = MatDiagonalSet(A,appctx->base_diag,INSERT_VALUES);CHKERRQ(ierr);  
+  
+  sprintf(fname,"ref_index_dmda.h5",(int) appctx->prop_steps,(int) iteration_number);
+  
+  if (iteration_number < appctx->prop_steps){
+      PetscViewer hdf5_rid_viewer;   /* viewer to read refractive index*/
+
+      ierr = PetscViewerHDF5Open(PETSC_COMM_WORLD, fname,
+                                 FILE_MODE_READ,&hdf5_rid_viewer);
+          CHKERRQ(ierr); 
+      ierr = VecLoad(appctx->slice_rid,hdf5_rid_viewer);CHKERRQ(ierr);
+      ierr = PetscViewerDestroy(&hdf5_rid_viewer);CHKERRQ(ierr);  
+
+      ierr = MatDiagonalSet(A,appctx->slice_rid,ADD_VALUES);CHKERRQ(ierr);
+      }
+    
+  /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+     Complete the matrix assembly process and set some options
+     - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+  ierr = MatAssemblyBegin(A,MAT_FINAL_ASSEMBLY);CHKERRQ(ierr);
+  ierr = MatAssemblyEnd(A,MAT_FINAL_ASSEMBLY);CHKERRQ(ierr);
     
   return 0;
 }

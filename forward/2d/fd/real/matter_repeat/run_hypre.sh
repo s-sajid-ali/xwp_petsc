@@ -1,0 +1,14 @@
+mpirun -np 32 ./ex_real_k1_matter_repeat \
+	-ts_type cn \
+	-ksp_type gmres \
+	-ksp_rtol 1e-5 \
+	-pc_type fieldsplit -pc_fieldsplit_type multiplicative \
+	-fieldsplit_a_pc_type hypre \
+	-fieldsplit_a_pc_hypre_type boomeramg \
+	-fieldsplit_a_pc_hypre_boomeramg_smooth_type Euclid \
+	-fieldsplit_a_pc_hypre_euclid_reuse \
+	-fieldsplit_b_pc_type hypre \
+	-fieldsplit_b_pc_hypre_type boomeramg \
+	-fieldsplit_b_pc_hypre_boomeramg_smooth_type Euclid \
+	-fieldsplit_b_pc_hypre_euclid_reuse \
+	-ts_monitor -ksp_monitor -log_view

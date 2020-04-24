@@ -3,37 +3,18 @@ static char help[] ="X-ray propagation in matter in 1D\n\
 Solves a simple time-independent linear PDE .\n\
 Input parameters include:\n\
   -m <points>, where <points> = number of grid points\n\
-  -debug              : Activate debugging printouts\n\
-  -nox                : Deactivate x-window graphics\n\n";
-
-/*
-   Concepts: TS^time-independent linear problems
-   Concepts: TS^Helmholtz equation
-*/
+  -debug              : Activate debugging printouts\n\n";
 
 /* ------------------------------------------------------------------------
 
    This program solves the one-dimensional helmholtz equation 
        u_t = A*u_xx + F_t*u,
-   This is a linear, second-order, parabolic equation.
 
    We discretize the right-hand side using finite differences with
    uniform grid spacing h:
        u_xx = (u_{i+1} - 2u_{i} + u_{i-1})/(h^2)
-   We then demonstrate time evolution using the various TS methods by
-   running the program via
-       ex3 -ts_type <timestepping solver>
+   
   ------------------------------------------------------------------------- */
-
-/*
-   Include "petscts.h" so that we can use TS solvers.  Note that this file
-   automatically includes:
-     petscsys.h       - base PETSc routines   petscvec.h  - vectors
-     petscmat.h  - matrices
-     petscis.h     - index sets            petscksp.h  - Krylov subspace methods
-     petscviewer.h - viewers               petscpc.h   - preconditioners
-     petscksp.h   - linear solvers        petscsnes.h - nonlinear solvers
-*/
 
 #include <petscts.h>
 #include <petscdraw.h>

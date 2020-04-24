@@ -1,49 +1,21 @@
 
-static char help[] ="Attempt X-ray propagation in matter based on ex3\n\
-Solves a simple time-dependent linear PDE .\n\
+static char help[] ="X-ray free space propagation\n\
+Solves a simple time-independent linear PDE .\n\
 Input parameters include:\n\
   -m <points>, where <points> = number of grid points\n\
-  -debug              : Activate debugging printouts\n\
-  -nox                : Deactivate x-window graphics\n\n";
-
-/*
-   Concepts: TS^time-dependent linear problems
-   Processors: 1
-*/
+  -debug              : Activate debugging printouts\n\n";
 
 /* ------------------------------------------------------------------------
 
-   This program solves the one-dimensional helmholtz equation:
-       u_t = A*u_xx + F*u,
-   This is a linear, second-order, parabolic equation.
-
-   We discretize the right-hand side using finite differences with
-   uniform grid spacing h:
+   This program solves the one-dimensional x-ray PWE equation :
+       u_t = A*u_xx,
+    
+   discretized using finite differences with uniform grid spacing h:
        u_xx = (u_{i+1} - 2u_{i} + u_{i-1})/(h^2)
-   We then demonstrate time evolution using the various TS methods by
-   running the program via
-       ex3 -ts_type <timestepping solver>
-
-   Notes:
-   time-dependent F:   f(u,t) is a function of t
-
-    Uniprocessor example
-
-  ------------------------------------------------------------------------- */
-
-/*
-   Include "petscts.h" so that we can use TS solvers.  Note that this file
-   automatically includes:
-     petscsys.h       - base PETSc routines   petscvec.h  - vectors
-     petscmat.h  - matrices
-     petscis.h     - index sets            petscksp.h  - Krylov subspace methods
-     petscviewer.h - viewers               petscpc.h   - preconditioners
-     petscksp.h   - linear solvers        petscsnes.h - nonlinear solvers
-*/
+   ------------------------------------------------------------------------ */
 
 #include <petscts.h>
 #include <petscdraw.h>
-#include <petscviewerhdf5.h>
 
 /*
    User-defined application context - contains data needed by the
@@ -52,20 +24,18 @@ Input parameters include:\n\
 typedef struct {
   PetscInt    m;                 /* total number of grid points */
   PetscReal   step_grid;         /* grid spacing */
+  PetscReal   slices;            /* number of slices through object */
   PetscReal   lambda;            /* wavelength */
-  PetscReal   step_time;         /* step size in time */
   PetscBool   debug;             /* flag (1 indicates activation of debugging printouts) */
-  PetscViewer viewer1;           /* viewer for the solution */
-  PetscViewer hdf5_sol_viewer;   /* viewer to write the solution to hdf5*/
-  PetscViewer hdf5_rid_viewer;   /* viewer to write the ref index to hdf5, for debugging*/
-  Mat         ref_index;         /* Matrix holding the refractive indices*/
+  PetscViewer viewer1;           /* viewers for the solution and error */
+  Mat         A;                 /* RHS mat, used with IFunction interface */
 } AppCtx;
 
 /*
    User-defined routines
 */
 extern PetscErrorCode InitialConditions(Vec,AppCtx*);
-extern PetscErrorCode RHSMatrixMatter(TS,PetscReal,Vec,Mat,Mat,void*);
+extern PetscErrorCode RHSMatrixFreeSpace(TS,PetscReal,Vec,Mat,Mat,void*);
 extern PetscErrorCode Monitor(TS,PetscInt,PetscReal,Vec,void*);
 
 int main(int argc,char **argv)
@@ -74,14 +44,13 @@ int main(int argc,char **argv)
   TS             ts;                     /* timestepping context */
   Mat            A;                      /* matrix data structure */
   Vec            u;                      /* approximate solution vector */
-  PetscReal      time_total_max = 1e-3;  /* default max total time */
-  PetscInt       time_steps_max = 5000;  /* default max timesteps */
-  PetscDraw      draw;                   /* drawing context */  
-  PetscInt       steps;                  /* output for TSGetStepNumber */  
-  PetscInt       m;                      /* problem size */
-  PetscReal      dt;                     /* For TSSetTimeStep*/
-  PetscMPIInt    size;                   /* MPI size*/
+  PetscReal      time_total_max = 1e-5;  /* default max total time */
+  PetscInt       time_steps_max = 250;   /* default max timesteps */
+  PetscDraw      draw;                   /* drawing context */
   PetscErrorCode ierr;
+  PetscInt       steps,m;
+  PetscMPIInt    size,rank;
+  PetscReal      dt;
 
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
      Initialize program and set problem parameters
@@ -89,60 +58,36 @@ int main(int argc,char **argv)
 
   ierr = PetscInitialize(&argc,&argv,(char*)0,help);if (ierr) return ierr;
   ierr = MPI_Comm_size(PETSC_COMM_WORLD,&size);CHKERRQ(ierr);
-  if (size != 1) SETERRQ(PETSC_COMM_SELF,1,"This is a uniprocessor example only!");
+  ierr = MPI_Comm_rank(PETSC_COMM_WORLD,&rank);CHKERRQ(ierr);
 
-  m    = 5000;
+  m    = 256;
   ierr = PetscOptionsGetInt(NULL,NULL,"-m",&m,NULL);CHKERRQ(ierr);
   ierr = PetscOptionsHasName(NULL,NULL,"-debug",&appctx.debug);CHKERRQ(ierr);
 
   appctx.m         = m;
-  appctx.step_grid = 1.4e-9;  
-  appctx.lambda    = 1.23984e-10;
-  appctx.step_time = time_total_max/time_steps_max;
+  appctx.step_grid = 1e-9;  
+  appctx.slices    = 1000;
+  appctx.lambda    = 0.12398e-9;
 
-  ierr = PetscPrintf(PETSC_COMM_SELF,"Solving a linear TS problem on 1 processor\n");CHKERRQ(ierr);
-  ierr = PetscPrintf(PETSC_COMM_SELF,"m : %d, lambda : %e\n",appctx.m, appctx.lambda);CHKERRQ(ierr);
-    
-  /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-     Read the refractive index matrix and save it at appctx->ref_index
-     Destroy the viewer
-     - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
-  PetscViewer ref_index_viewer;
-  ierr = PetscViewerBinaryOpen(PETSC_COMM_WORLD,"refractive_index_bin.dat",FILE_MODE_READ,&ref_index_viewer);CHKERRQ(ierr);
-  
-  ierr = MatCreate(PETSC_COMM_WORLD,&appctx.ref_index);CHKERRQ(ierr);
-  ierr = MatSetType(appctx.ref_index,MATDENSE);CHKERRQ(ierr);
-  ierr = MatSetFromOptions(appctx.ref_index);CHKERRQ(ierr);
-  ierr = MatLoad(appctx.ref_index,ref_index_viewer);CHKERRQ(ierr);
-  ierr = PetscViewerDestroy(&ref_index_viewer);CHKERRQ(ierr);
-    
-  /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-     Store solution as hdf5
-     - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
-    
-  ierr = PetscViewerHDF5Open(PETSC_COMM_WORLD,"solution.h5",FILE_MODE_WRITE,&appctx.hdf5_sol_viewer);CHKERRQ(ierr);
-
-  /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-   Store ref index as hdf5
-    - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
-    
-  ierr = PetscViewerHDF5Open(PETSC_COMM_WORLD,"rid.h5",FILE_MODE_WRITE,&appctx.hdf5_rid_viewer);CHKERRQ(ierr);
+  if(rank==0){
+      ierr = PetscPrintf(PETSC_COMM_SELF,"Solving a linear TS problem on 1 processor\n");CHKERRQ(ierr);
+      ierr = PetscPrintf(PETSC_COMM_SELF,"m : %d, slices : %f, lambda : %e\n",appctx.m, appctx.slices, appctx.lambda);CHKERRQ(ierr);
+  }
 
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
      Create vector data structures
      - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
-  /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-     Create vector data structures for approximate solutions
+  /*- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+     Create vector data structures for approximate solution
     - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -*/
-  ierr = VecCreateSeq(PETSC_COMM_SELF,m,&u);CHKERRQ(ierr);
-  ierr = PetscObjectSetName((PetscObject)u, "sol_vec");CHKERRQ(ierr);
+   ierr = VecCreateMPI(PETSC_COMM_WORLD,PETSC_DECIDE,m,&u); CHKERRQ(ierr);
 
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
      Set up display to show graph of the solution
      - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
-  ierr = PetscViewerDrawOpen(PETSC_COMM_SELF,0,"",80,380,400,160,&appctx.viewer1);CHKERRQ(ierr);
+  ierr = PetscViewerDrawOpen(PETSC_COMM_WORLD,0,"",80,380,400,160,&appctx.viewer1);CHKERRQ(ierr);
   ierr = PetscViewerDrawGetDraw(appctx.viewer1,0,&draw);CHKERRQ(ierr);
   ierr = PetscDrawSetDoubleBuffer(draw);CHKERRQ(ierr);
  
@@ -150,7 +95,7 @@ int main(int argc,char **argv)
      Create timestepping solver context
      - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
-  ierr = TSCreate(PETSC_COMM_SELF,&ts);CHKERRQ(ierr);
+  ierr = TSCreate(PETSC_COMM_WORLD,&ts);CHKERRQ(ierr);
   ierr = TSSetProblemType(ts,TS_LINEAR);CHKERRQ(ierr);
 
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -160,21 +105,23 @@ int main(int argc,char **argv)
   ierr = TSMonitorSet(ts,Monitor,&appctx,NULL);CHKERRQ(ierr);
 
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
      Create matrix data structure; set matrix evaluation routine.
      - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
-  ierr = MatCreate(PETSC_COMM_SELF,&A);CHKERRQ(ierr);
+  ierr = MatCreate(PETSC_COMM_WORLD,&A);CHKERRQ(ierr);
   ierr = MatSetSizes(A,PETSC_DECIDE,PETSC_DECIDE,m,m);CHKERRQ(ierr);
   ierr = MatSetFromOptions(A);CHKERRQ(ierr);
   ierr = MatSetUp(A);CHKERRQ(ierr);
 
+  appctx.A = NULL;
   /*
     For linear problems with a time-dependent f(u,t) in the equation
     u_t = f(u,t), the user provides the discretized right-hand-side
     as a time-dependent matrix.
   */
   ierr = TSSetRHSFunction(ts,NULL,TSComputeRHSFunctionLinear,&appctx);CHKERRQ(ierr);
-  ierr = TSSetRHSJacobian(ts,A,A,RHSMatrixMatter,&appctx);CHKERRQ(ierr);
+  ierr = TSSetRHSJacobian(ts,A,A,RHSMatrixFreeSpace,&appctx);CHKERRQ(ierr);
   
  /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
      Set solution vector and initial timestep
@@ -228,9 +175,7 @@ int main(int argc,char **argv)
   ierr = MatDestroy(&A);CHKERRQ(ierr);
   ierr = VecDestroy(&u);CHKERRQ(ierr);
   ierr = PetscViewerDestroy(&appctx.viewer1);CHKERRQ(ierr);
-  ierr = PetscViewerDestroy(&appctx.hdf5_sol_viewer);CHKERRQ(ierr);
-  ierr = PetscViewerDestroy(&appctx.hdf5_rid_viewer);CHKERRQ(ierr);
-  ierr = MatDestroy(&appctx.ref_index);CHKERRQ(ierr);
+  ierr = MatDestroy(&appctx.A);CHKERRQ(ierr);
 
   /*
      Always call PetscFinalize() before exiting a program.  This routine
@@ -254,37 +199,30 @@ int main(int argc,char **argv)
 */
 PetscErrorCode InitialConditions(Vec u,AppCtx *appctx)
 {
-  PetscScalar    *u_localptr;
   PetscErrorCode ierr;
-  PetscInt       i;
+  PetscInt       i,low,high;
+  PetscScalar    val;
     
-
-  /*
-    Get a pointer to vector data.
-    - For default PETSc vectors, VecGetArray() returns a pointer to
-      the data array.  Otherwise, the routine is implementation dependent.
-    - You MUST call VecRestoreArray() when you no longer need access to
-      the array.
-    - Note that the Fortran interface to VecGetArray() differs from the
-      C version.  See the users manual for details.
-  */
-  ierr = VecGetArray(u,&u_localptr);CHKERRQ(ierr);
-
-  /*
-     We initialize the solution array by simply writing the solution
-     directly into the array locations.  Alternatively, we could use
-     VecSetValues() or VecSetValuesLocal().
-  */
-  for (i=0; i<appctx->m; i++) {
-      if (i<appctx->m/7){u_localptr[i] = 0+0*PETSC_i;}
-      else if (i>((appctx->m*3/7))){u_localptr[i] = 0+0*PETSC_i;}
-      else {u_localptr[i] = 1+0*PETSC_i;}
+  /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+     Get local vector storage info, set values and assemble
+  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+ 
+  ierr = VecGetOwnershipRange(u,&low,&high); CHKERRQ(ierr);
+    
+  for (i=low; i<high; i++) {
+      if (i>appctx->m/4 && i< 0.75*(appctx->m)){
+          val = 1;
+          ierr = VecSetValues(u,1,&i,&val,INSERT_VALUES);
+        }
+      else {
+          val = 0;
+          ierr = VecSetValues(u,1,&i,&val,INSERT_VALUES);
+          }
       }
-  /*
-     Restore vector
-  */
-  ierr = VecRestoreArray(u,&u_localptr);CHKERRQ(ierr);
 
+  ierr = VecAssemblyBegin(u);CHKERRQ(ierr);
+  ierr = VecAssemblyEnd(u);CHKERRQ(ierr);
+    
   /*
      Print debugging information if desired
   */
@@ -321,19 +259,12 @@ PetscErrorCode Monitor(TS ts,PetscInt step,PetscReal time,Vec u,void *ctx)
   PetscErrorCode ierr;
   PetscReal      dt,dttol;
   Vec            u_abs;                  /* absolute value of approximate solution vector */
-  Vec            rid;                    /* optionally store refractive index for debugging */
-  PetscInt       iteration_number;
-  iteration_number = time/appctx->step_time;    
-    
-    
-  ierr = PetscViewerHDF5SetTimestep(appctx->hdf5_sol_viewer, iteration_number);CHKERRQ(ierr);
-  ierr = VecView(u,appctx->hdf5_sol_viewer);CHKERRQ(ierr);
-   
-    
+  
   /*- - - - - - - - - - - - - - - - - - - -
       Copy solution vector to new vector, 
       conver to absolute value for viewing
    - - - - - - - - - - - - - - - - - - - -*/
+    
   ierr = VecDuplicate(u,&u_abs);CHKERRQ(ierr);
   ierr = VecCopy(u,u_abs);CHKERRQ(ierr);
   ierr = VecAbs(u_abs);CHKERRQ(ierr);
@@ -342,23 +273,18 @@ PetscErrorCode Monitor(TS ts,PetscInt step,PetscReal time,Vec u,void *ctx)
       View a graph of the current iterate
    - - - - - - - - - - - - - - - - - - - - */
   ierr = VecView(u_abs,appctx->viewer1);CHKERRQ(ierr);
-      
-  ierr = VecDestroy(&u_abs);CHKERRQ(ierr);  
-  /*
+  
+
+  ierr = VecDestroy(&u_abs);CHKERRQ(ierr);
+    
+  /*- - - - - - - - - - - - - - - - - - - -
      Print debugging information if desired
-  */
+   - - - - - - - - - - - - - - - - - - - -*/
   if (appctx->debug) {
-      ierr = VecDuplicate(u,&rid);CHKERRQ(ierr);
-      if (iteration_number<appctx->m){
-          ierr = MatGetColumnVector(appctx->ref_index,rid,iteration_number);CHKERRQ(ierr);}  
-      ierr = PetscObjectSetName((PetscObject)rid, "rid_vec");CHKERRQ(ierr);
-      ierr = PetscViewerHDF5SetTimestep(appctx->hdf5_rid_viewer, iteration_number);CHKERRQ(ierr);
-      ierr = VecView(rid,appctx->hdf5_rid_viewer);CHKERRQ(ierr);
-      ierr = VecDestroy(&rid);CHKERRQ(ierr); 
+    ierr = PetscPrintf(PETSC_COMM_SELF,"Computed solution vector\n");CHKERRQ(ierr);
+    ierr = VecView(u,PETSC_VIEWER_STDOUT_SELF);CHKERRQ(ierr);
      }
 
-  
-    
   return 0;
 }
 /* --------------------------------------------------------------------- */
@@ -381,35 +307,45 @@ PetscErrorCode Monitor(TS ts,PetscInt step,PetscReal time,Vec u,void *ctx)
    Recall that MatSetValues() uses 0-based row and column numbers
    in Fortran as well as in C.
 */
-PetscErrorCode RHSMatrixMatter(TS ts,PetscReal t,Vec X,Mat AA,Mat BB,void *ctx)
+PetscErrorCode RHSMatrixFreeSpace(TS ts,PetscReal t,Vec X,Mat AA,Mat BB,void *ctx)
 {
   Mat            A       = AA;                /* Jacobian matrix */
   AppCtx         *appctx = (AppCtx*)ctx;     /* user-defined application context */
-  PetscInt       mstart  = 0;
-  PetscInt       mend    = appctx->m;
+  PetscInt       low,high;
   PetscErrorCode ierr;
   PetscInt       i,idx[3];
   PetscScalar    v[3];  
-  Vec            slice_vec;
   PetscComplex   prefac = (-1*PETSC_i*appctx->lambda/(4*PETSC_PI))*(1/(appctx->step_grid*appctx->step_grid));
 
-  
-  PetscInt iteration_number;
-  iteration_number = t/appctx->step_time;    
-    
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
      Compute entries for the locally owned part of the matrix
      - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+    
+  ierr = MatGetOwnershipRange(A,&low,&high); CHKERRQ(ierr); 
+
   /*
      Set matrix rows corresponding to interior data.  We construct the
      matrix one row at a time.
   */
-  v[0] = prefac*1; v[1] = prefac*-2; v[2] = prefac*1;
-  for (i=mstart; i<mend; i++) {
-    idx[0] = i-1; idx[1] = i; idx[2] = i+1;
-    ierr   = MatSetValues(A,1,&i,3,idx,v,INSERT_VALUES);CHKERRQ(ierr);
-  }
-
+  
+  
+  for (i=low; i<high; i++) {
+    //Set matrix rows corresponding to boundary data
+    if (i == 0){
+        v[0] = 1.0;
+        ierr = MatSetValues(A,1,&i,1,&i,v,INSERT_VALUES);CHKERRQ(ierr); 
+        }
+    else if (i == appctx->m-1){
+        v[0] = 1.0;
+        ierr = MatSetValues(A,1,&i,1,&i,v,INSERT_VALUES);CHKERRQ(ierr);
+        }
+    else{
+        v[0] = prefac*-1; v[1] = prefac*2; v[2] = prefac*-1;
+        idx[0] = i-1; idx[1] = i; idx[2] = i+1;
+        ierr   = MatSetValues(A,1,&i,3,idx,v,INSERT_VALUES);CHKERRQ(ierr);
+        }
+    }
+ 
   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
      Complete the matrix assembly process and set some options
      - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
@@ -421,84 +357,14 @@ PetscErrorCode RHSMatrixMatter(TS ts,PetscReal t,Vec X,Mat AA,Mat BB,void *ctx)
   */
   ierr = MatAssemblyBegin(A,MAT_FINAL_ASSEMBLY);CHKERRQ(ierr);
   ierr = MatAssemblyEnd(A,MAT_FINAL_ASSEMBLY);CHKERRQ(ierr);
-
-    
-  /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-     Set the diagonal with current time dependant F, 
-     store refractive index
-     - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
-    
-  ierr = VecCreateSeq(PETSC_COMM_SELF,appctx->m,&slice_vec);CHKERRQ(ierr);
-  if (iteration_number<appctx->m){
-      ierr = MatGetColumnVector(appctx->ref_index,slice_vec,iteration_number);CHKERRQ(ierr);}
-  ierr = MatDiagonalSet(A,slice_vec,ADD_VALUES); CHKERRQ(ierr);
-  ierr = MatAssemblyBegin(A,MAT_FINAL_ASSEMBLY);CHKERRQ(ierr);
-  ierr = MatAssemblyEnd(A,MAT_FINAL_ASSEMBLY);CHKERRQ(ierr);
-    
-  /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-     Boundary conditions.
-     - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
-  
-  PetscInt     row[2];
-  PetscScalar  rho;
-  row[0]=0; row[1]=appctx->m-1; 
-  rho = 0;
-  ierr = MatZeroRowsColumns(A, 2, row, rho, NULL,NULL ); CHKERRQ(ierr);
-  ierr = MatAssemblyBegin(A,MAT_FINAL_ASSEMBLY);CHKERRQ(ierr);
-  ierr = MatAssemblyEnd(A,MAT_FINAL_ASSEMBLY);CHKERRQ(ierr);
-  
+ 
     
   /*
      Set and option to indicate that we will never add a new nonzero location
      to the matrix. If we do, it will generate an error.
   */
-  ierr = MatSetOption(A,MAT_NEW_NONZERO_LOCATION_ERR,PETSC_TRUE);CHKERRQ(ierr);   
-    
+  ierr = MatSetOption(A,MAT_NEW_NONZERO_LOCATION_ERR,PETSC_TRUE);CHKERRQ(ierr);
+
   return 0;
 }
 
-/*TEST
-
-    test:
-      args: -nox -ts_type ssp -ts_dt 0.0005
-
-    test:
-      suffix: 2
-      args: -nox -ts_type ssp -ts_dt 0.0005 -time_dependent_rhs 1
-
-    test:
-      suffix: 3
-      args:  -nox -ts_type rosw -ts_max_steps 3 -ksp_converged_reason
-      filter: sed "s/ATOL/RTOL/g"
-      requires: !single
-
-    test:
-      suffix: 4
-      args: -nox -ts_type beuler -ts_max_steps 3 -ksp_converged_reason
-      filter: sed "s/ATOL/RTOL/g"
-
-    test:
-      suffix: 5
-      args: -nox -ts_type beuler -ts_max_steps 3 -ksp_converged_reason -time_dependent_rhs
-      filter: sed "s/ATOL/RTOL/g"
-
-    test:
-      requires: !single
-      suffix: pod_guess
-      args: -nox -ts_type beuler -use_ifunc -ts_dt 0.0005 -ksp_guess_type pod -pc_type none -ksp_converged_reason
-
-    test:
-      requires: !single
-      suffix: pod_guess_Ainner
-      args: -nox -ts_type beuler -use_ifunc -ts_dt 0.0005 -ksp_guess_type pod -ksp_guess_pod_Ainner -pc_type none -ksp_converged_reason
-
-    test:
-      requires: !single
-      suffix: fischer_guess
-      args: -nox -ts_type beuler -use_ifunc -ts_dt 0.0005 -ksp_guess_type fischer -pc_type none -ksp_converged_reason
-
-    test:
-      requires: !single
-      suffix: fischer_guess_2
-      args: -nox -ts_type beuler -use_ifunc -ts_dt 0.0005 -ksp_guess_type fischer -ksp_guess_fischer_model 2,10 -pc_type none -ksp_converged_reason
-TEST*/

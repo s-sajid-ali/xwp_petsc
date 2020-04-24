@@ -1,4 +1,4 @@
-static char help[] = "2D Multislice,  MPI-multislice, matter-repeat \n\n";
+static char help[] = "2D Multislice,  MPI-multislice, matter \n\n";
 
 #include <petscmat.h>
 #include <petscviewerhdf5.h>
