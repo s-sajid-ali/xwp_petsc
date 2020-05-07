@@ -1,14 +1,24 @@
-mpirun -np 32 ./ex_real_k1_matter_repeat \
+mpirun -np 32 ./ex_k1 \
+	-snes_lag_preconditioner -1 \
+	-prop_steps 10 \
 	-ts_type cn \
-	-ksp_type gmres \
-	-ksp_rtol 1e-5 \
-	-pc_type fieldsplit -pc_fieldsplit_type multiplicative \
-	-fieldsplit_a_pc_type hypre \
-	-fieldsplit_a_pc_hypre_type boomeramg \
-	-fieldsplit_a_pc_hypre_boomeramg_smooth_type Euclid \
-	-fieldsplit_a_pc_hypre_euclid_reuse \
-	-fieldsplit_b_pc_type hypre \
-	-fieldsplit_b_pc_hypre_type boomeramg \
-	-fieldsplit_b_pc_hypre_boomeramg_smooth_type Euclid \
-	-fieldsplit_b_pc_hypre_euclid_reuse \
-	-ts_monitor -ksp_monitor -log_view
+	-ksp_reuse_preconditioner \
+	-ksp_type fgmres \
+	-pc_type hypre \
+	-pc_hypre_type boomeramg \
+	-pc_hypre_boomeramg_numfunctions 2 \
+	-pc_hypre_boomeramg_strong_threshold 0.0 \
+	-pc_hypre_boomeramg_interp_type ext+i \
+	-pc_hypre_boomeramg_coarsen_type modifiedRuge-Stueben \
+	-pc_hypre_boomeramg_agg_nl 3 \
+	-pc_hypre_boomeramg_max_iter 2 \
+	-pc_hypre_boomeramg_nodal_coarsen 6 \
+	-pc_hypre_boomeramg_relax_type_all l1scaled-SOR/Jacobi \
+	-pc_hypre_boomeramg_grid_sweeps_all 2 \
+	-pc_hypre_boomeramg_smooth_type Euclid \
+	-pc_hypre_boomeramg_eu_level 2 \
+	-pc_hypre_euclid_reuse \
+	-pc_hypre_boomeramg_print_statistics \
+	-ksp_view -ksp_monitor \
+	-ts_monitor \
+	-log_view

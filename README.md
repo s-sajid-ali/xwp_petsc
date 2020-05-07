@@ -7,3 +7,5 @@ Code for evaluation of wave propagation (fourier and real space approaches) usin
 
 #### In Progress :
 - Tomography simulation by rotating the object using a rotation matrix.
+
+The phantom test case conatins data from [EMD-3756](https://www.emdataresource.org/EMD-3756)
