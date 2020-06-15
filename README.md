@@ -2,8 +2,8 @@
 Code for evaluation of wave propagation (fourier and real space approaches) using PETSc. Works for 1D and 2D for free space and matter.
 
 #### Currently implemented  :
-- MPI - Multislice : Iterate between slice projections diffraction and free space propagation
-- Finite Difference method : Solve the Helmholtz PDE using the TS integrator and Multigrid preconditioning.
+- Full Array Fresnel Multislice : Iterate between slice projections diffraction and free space propagation
+- Finite Difference method : Solve the Helmholtz PDE using TS integrator
 
 #### In Progress :
 - Tomography simulation by rotating the object using a rotation matrix.
