@@ -5,7 +5,4 @@ Code for evaluation of wave propagation (fourier and real space approaches) usin
 - Full Array Fresnel Multislice : Iterate between slice projections diffraction and free space propagation
 - Finite Difference method : Solve the Helmholtz PDE using TS integrator
 
-#### In Progress :
-- Tomography simulation by rotating the object using a rotation matrix.
 
-The phantom test case conatins data from [EMD-3756](https://www.emdataresource.org/EMD-3756)
